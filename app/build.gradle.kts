@@ -14,8 +14,8 @@ android {
         applicationId = "ru.meshcheryakov.androidradminremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -67,13 +67,22 @@ android {
         compose = true
     }
     packaging {
+        jniLibs { useLegacyPackaging = true }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
 }
 
+val setupXray by tasks.registering(Exec::class) {
+    val script = rootProject.file("scripts/setup-xray.py")
+    inputs.file(script)
+    outputs.file(project.file("libs/libXray.aar"))
+    commandLine(if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3", script.absolutePath)
+}
+
 dependencies {
+    implementation(files("libs/libXray.aar").builtBy(setupXray))
     val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)

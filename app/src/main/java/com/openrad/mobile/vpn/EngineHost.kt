@@ -26,6 +26,10 @@ object EngineHost {
     data class InterfaceStatus(val ready: Boolean = false, val error: String? = null)
     data class Event(val message: String, val error: Boolean)
 
+    val lifecycle = kotlinx.coroutines.sync.Mutex()
+    @Volatile var sessionBusy = false
+    @Volatile var connectionError: String? = null
+
     private val _state = MutableStateFlow(EngineState())
     val state: StateFlow<EngineState> = _state.asStateFlow()
 

@@ -1,5 +1,7 @@
 # Архитектура Android Radmin Remote
 
+Историческое описание версии 0.1. Актуальная интеграция Xray 0.2: [XRAY-0.2.ru.md](XRAY-0.2.ru.md).
+
 ## Зафиксированная основа
 
 OpenRad `gringoestrangeiro/openrad`, commit `47eb54f6b051aadc37260d405681b2111b50b7cc`.

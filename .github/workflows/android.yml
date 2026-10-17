@@ -28,7 +28,9 @@ jobs:
       - name: Verify JavaScript
         run: node --check app/src/main/assets/www/app.js
       - name: Unit tests and debug APK
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --stacktrace
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-build-cache --stacktrace
+      - name: Native Xray smoke test (loopback only)
+        run: python3 scripts/test-xray-native.py --download
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -46,14 +48,14 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.1-debug
+          tag_name: v0.2.0-debug
           target_commitish: ${{ github.sha }}
-          name: Android Radmin Remote 0.1.1 · debug
+          name: Android Radmin Remote 0.2.0 · debug
           prerelease: true
           files: app/build/outputs/apk/debug/app-debug.apk
           fail_on_unmatched_files: true
           body: |
-            Fix Android socket protection: bind before protect and connect.
-            Debug prototype: local HTML UI, OpenRad engine, Direct / SOCKS5 TCP relay.
-            VLESS/Reality and AUTO are not implemented. Real Android/Windows interoperability requires manual validation.
+            Embedded libXray 26.10.10: import Xray/Happ JSON and select a VLESS Reality TCP profile.
+            Single APK: HTML UI, OpenRad engine, Direct / SOCKS5 / embedded Xray TCP relay.
+            TCP Reality only; gRPC and AUTO are not enabled. Real proxy connectivity requires manual validation.
             Install app-debug.apk on Android 8.0+. See README for configuration.

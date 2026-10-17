@@ -17,6 +17,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.openrad.mobile.web.WebBridge
 import kotlinx.coroutines.CompletableDeferred
+import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,6 +28,35 @@ class MainActivity : ComponentActivity() {
     private lateinit var bridge: WebBridge
     private var consent: CompletableDeferred<Boolean>? = null
     private var exportText: String? = null
+    private var importResult: CompletableDeferred<Uri?>? = null
+    private val importDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        importResult?.complete(uri)
+        importResult = null
+    }
+
+    private suspend fun readImportFile(): String? {
+        val uri = withContext(Dispatchers.Main) {
+            check(importResult == null) { "Import already pending" }
+            val pending = CompletableDeferred<Uri?>()
+            importResult = pending
+            importDocument.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
+            try { pending.await() } finally { if (importResult === pending) importResult = null }
+        } ?: return null
+        return withContext(Dispatchers.IO) {
+            val max = com.openrad.mobile.xray.XrayImport.MAX_BYTES
+            contentResolver.openInputStream(uri)?.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    if (output.size() + n > max) throw com.openrad.mobile.xray.ProfileImportException("JSON превышает 512 КБ")
+                    output.write(buffer, 0, n)
+                }
+                output.toString("UTF-8")
+            } ?: throw com.openrad.mobile.xray.ProfileImportException("Не удалось прочитать файл")
+        }
+    }
     private val vpnConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         consent?.complete(it.resultCode == Activity.RESULT_OK && VpnService.prepare(this) == null)
         consent = null
@@ -74,13 +104,13 @@ class MainActivity : ComponentActivity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
                 request.url.toString().substringBefore('#') != PAGE
         }
-        bridge = WebBridge(this, lifecycleScope, ::requestVpn) { text ->
+        bridge = WebBridge(this, lifecycleScope, ::requestVpn, { text ->
             withContext(Dispatchers.Main) {
                 check(exportText == null) { "Export already pending" }
                 exportText = text
                 export.launch("radmin-diagnostics.txt")
             }
-        }
+        }, ::readImportFile)
         WebViewCompat.addWebMessageListener(web, "Native", setOf(ORIGIN)) { _, message, origin, mainFrame, reply ->
             if (mainFrame && origin.toString() == ORIGIN) {
                 bridge.receive(message.data.orEmpty()) { response -> reply.postMessage(response) }
@@ -91,6 +121,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         consent?.cancel()
+        importResult?.cancel()
         if (::web.isInitialized) {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) WebViewCompat.removeWebMessageListener(web, "Native")
             web.destroy()

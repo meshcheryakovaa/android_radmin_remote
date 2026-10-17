@@ -25,3 +25,16 @@ Not executed: real Android install, on-device WebView/VPN consent, Windows inter
 TCP now binds an ephemeral local port before VpnService.protect(), so Android has a native socket descriptor. Protection still occurs before connect, for both DIRECT and SOCKS5. Regressions check bound/unconnected state at protect and closure after rejection. Real on-device confirmation is pending.
 
 0.1.1 local validation: testDebugUnitTest + assembleDebug succeeded; 135 passed, 1 skipped, zero failures/errors.
+
+## 0.2.0: embedded Xray
+
+- Official libXray Android v26.10.10 ZIP and extracted AAR SHA-256 verified. Removed the local AAR and verified Gradle automatically downloaded/verified the dependency again.
+- `testDebugUnitTest` + `assembleDebug --no-build-cache`: **BUILD SUCCESSFUL**. 143 tests total: **142 passed, 1 skipped, zero failures/errors**. Includes 7 new synthetic profile-import/credential-projection/runtime-config tests.
+- Official native Linux libXray from the same release: validated the exact Kotlin-generated synthetic Reality/TCP configuration; authenticated localhost SOCKS, rejected anonymous access, stopped/restarted twice and verified listener closure. No VLESS server connection was attempted. Both explicit-library and `--download` CI entry paths passed (verified ZIP cache for the latter).
+- Browser smoke test, synthetic bridge: six screens; paste/import/select/save; source JSON field cleared; selection contains no auth UUID; import controls disabled during active session; 320px and 390px layouts without horizontal overflow or JavaScript page errors. Screenshots `v02-*-synthetic.png` are layout fixtures, not proof of real Xray connectivity.
+- APK versionCode 3 / versionName 0.2.0, all four Go JNI ABIs present, a single VpnService declaration, MIT/MPL license texts packaged. `apksigner verify`: passed. Native libraries are compressed/extracted for a smaller universal APK.
+- Local APK SHA-256: `daa24b5f5f29ee39fdd86964b75aa712fdedd1a62e1aea0a1af699c108e433ea`. CI debug signing can produce a different checksum/signature.
+
+An AGP 8.5 DEX/R-class cache conflict occurred when adding the AAR to the existing classpath. A clean build without build cache passed; task build cache is now disabled for this project while ordinary up-to-date/incremental checks remain available.
+
+Not executed: native Android JNI loading, on-device protect(fd)/DNS callbacks, document picker, user-provider Reality handshake, real Radmin relay through Xray and restricted mobile networks. These require the device checklist in XRAY-0.2.ru.md. No user subscription, credentials or real provider configuration is included in the source tree or automatic tests.

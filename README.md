@@ -1,56 +1,61 @@
 # Android Radmin Remote
 
-Единый Android APK: локальный **HTML/CSS/JS интерфейс → Kotlin bridge → существующий OpenRad engine → Direct / SOCKS5 → Radmin VPN**.
+**Версия 0.2.0:** единый Android APK с локальным HTML-интерфейсом, OpenRad engine и встроенным Xray для **VLESS + Reality по TCP**.
 
-Прототип 0.1.1, Android 8.0+ (API 26), JDK 17. Основа — [OpenRad](https://github.com/gringoestrangeiro/openrad), MIT, зафиксирован commit `47eb54f6b051aadc37260d405681b2111b50b7cc`. Проект не связан с официальным Radmin.
+Android 8.0+ (API 26). DIRECT, внешний SOCKS5 или импорт серверов из Xray/Happ JSON. Единственный VpnService создаёт TUN с маршрутом `26.0.0.0/8`, MTU 1500. Остальной интернет телефона через этот TUN не направляется.
 
-## Что реализовано
+## Скачать
 
-- Шесть экранов: главная, сети, устройства, proxy, настройки, диагностика.
-- Реальный OpenRad engine: получение identity и 26.x IP, публичные и приватные сети, peers, authenticated RTT.
-- DIRECT или SOCKS5 CONNECT; SOCKS5 применяется ко всем исходящим TCP OpenRad, включая регистрацию, control, peer coordination и TCP relay.
-- В proxy-режиме peer-данные идут через TCP relay; direct TCP/UDP отключены, обхода proxy нет.
-- Один foreground VpnService, TUN 26.0.0.0/8, MTU 1500. Остальной интернет не попадает в этот TUN.
-- Защищённый WebMessage bridge, зашифрованные credentials, export TXT, GitHub Actions для APK.
+[Релиз 0.2.0 debug](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/v0.2.0-debug) · [app-debug.apk](https://github.com/meshcheryakovaa/android_radmin_remote/releases/download/v0.2.0-debug/app-debug.apk)
 
-VLESS/Reality и AUTO fallback **не реализованы**. Это VPN transport MVP, без Radmin Viewer / удалённого рабочего стола. Работу с реальной Windows-сетью нужно подтвердить на телефоне; мок-режим launcher не использует.
+Это тестовая APK со встроенными библиотеками для arm64-v8a, armeabi-v7a, x86_64 и x86. При несовместимой подписи предыдущей debug-сборки Android потребует удалить старую установку; это удалит локальную identity и настройки. Production signing настраивается отдельно от исходников.
 
-## Скачать APK
+## Первый запуск VLESS / Reality
 
-После успешной сборки APK доступен напрямую в [Releases → 0.1.1 debug](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/v0.1.1-debug).
+1. Установите APK. Отключите Happ и другие VPN-приложения.
+2. Откройте **Proxy → Импорт из Happ / Xray**.
+3. Вставьте экспортированный JSON и нажмите **Импортировать JSON**. Либо нажмите **Выбрать файл** и откройте `.json` / `.txt` до 512 КБ.
+4. Выберите режим **VLESS + Reality · внутри APK**, затем нужный сервер из списка. Нажмите **Сохранить**.
+5. На Главной нажмите **Подключиться**, разрешите Android VPN. Сначала запускается Xray и проверяется его внутренний SOCKS5-вход, затем OpenRad.
+6. Дождитесь `CONNECTED`, адреса `26.x.x.x`, «TUN готов» и транспорта **VLESS / Reality**. В Proxy / диагностике Xray должен быть `READY`.
+7. В **Сети** подключитесь к существующей Radmin VPN network. В **Устройствах** дождитесь peer `CONNECTED` и нажмите **PING**. В этом режиме ожидается `RELAY` с измеренным RTT.
 
-Также откройте [Actions → Android APK](https://github.com/meshcheryakovaa/android_radmin_remote/actions/workflows/android.yml), выберите успешный запуск для `main` и скачайте artifact **android-radmin-remote-debug**. Распакуйте ZIP и установите `app-debug.apk`. Для загрузки artifacts GitHub обычно требует вход в аккаунт. Debug APK подписывается тестовым ключом; production signing хранится отдельно от репозитория.
+Поддерживаются только outbounds `vless` + `reality` + `tcp` / `raw`. `gRPC`, балансировщик и правила маршрутизации Happ пока не импортируются. Приложение показывает количество импортированных TCP-профилей и пропущенных остальных записей. Повторный импорт заменяет список proxy-профилей, не затрагивая Radmin-сети и identity. Для изменения профиля сначала отключите VPN.
 
-## Собрать локально
+Импорт не выполняет исходную конфигурацию целиком: используются только проверенные поля выбранного TCP-профиля. Приложение создаёт собственный loopback SOCKS5 с непостоянным паролем, без дополнительного TUN и без отдельного Happ.
+
+## DIRECT и внешний SOCKS5
+
+Для DIRECT выберите соответствующий режим и подключитесь. Для внешнего SOCKS5 укажите сервер/порт и при необходимости логин/пароль. В SOCKS5 и Xray режимах OpenRad использует TCP relay; прямые peer TCP/UDP отключены. DIRECT сохраняет upstream-политику OpenRad: direct TCP/UDP по Wi-Fi, relay на остальных подключениях.
+
+Кнопка «Проверить» для Xray оценивает уже установленную аутентифицированную control-сессию OpenRad. Она не считает один ответ локального SOCKS5 доказательством доступности VLESS-сервера. Полный критерий — `CONNECTED`, готовый TUN и PING до ПК. Для внешнего SOCKS5 проверяется CONNECT к координатору; сама проверка не выполняет вход Radmin.
+
+## Сборка
+
+JDK 17, Python 3, curl, Android SDK 34 / build-tools 34.0.0:
 
 ```bash
-# JDK 17; Android SDK platform 34 + build-tools 34.0.0
-./scripts/setup-android-sdk.sh  # Linux: если SDK ещё нет
-./gradlew :app:testDebugUnitTest
-./gradlew :app:assembleDebug
+./scripts/setup-android-sdk.sh  # Linux, если SDK ещё нет
+python3 scripts/setup-xray.py  # официальный AAR, SHA-256 проверяется
+./gradlew :app:testDebugUnitTest :app:assembleDebug --no-build-cache
 ```
 
-Windows: откройте корень проекта в Android Studio, установите SDK 34 либо используйте `gradlew.bat` с теми же задачами. APK: `app/build/outputs/apk/debug/app-debug.apk`.
+Загрузка AAR также автоматически выполняется Gradle task `setupXray`. AAR не хранится в git; URL, версия и SHA-256 зафиксированы в скрипте. Android Studio открывает корень проекта; Windows использует Python 3, curl и `gradlew.bat`. Результат: `app/build/outputs/apk/debug/app-debug.apk`.
 
-## Первый запуск
+GitHub Actions собирает APK, запускает JVM-тесты и native smoke test на loopback, публикует versioned debug release и artifacts. DEX build cache отключён: при смене native classpath в AGP 8.5 локально наблюдались устаревшие архивы R-классов. Incremental/up-to-date проверки остаются доступны.
 
-1. Установите APK. При необходимости обновите Android System WebView.
-2. В «Настройки» укажите имя устройства.
-3. Для прямого подключения оставьте DIRECT; для proxy откройте «Proxy», выберите PROXY · SOCKS5, укажите сервер/порт и при необходимости логин/пароль. Нажмите «Сохранить».
-4. «Проверить» проверяет TCP CONNECT к координатору OpenRad. Это ещё не успешная аутентификация Radmin.
-5. На главной нажмите «Подключиться» и разрешите Android VPN. Дождитесь статуса CONNECTED, 26.x.x.x и «TUN готов».
-6. В «Сети» введите имя существующей сети, для приватной отметьте флаг и укажите пароль; подключитесь. Итог операции виден в списке и диагностике, некоторые сети требуют одобрения.
-7. В «Устройства» дождитесь CONNECTED и проверьте PING. Затем откройте нужный сервис узла по 26.x IP обычным Android-клиентом (например SMB/RDP-клиентом, если сервис настроен на Windows).
-8. Для смены proxy сначала отключитесь. После сохранения нового режима подключитесь снова.
+## Проверки и ограничения
 
-Прокси должен разрешать Radmin endpoints/ports и TCP relay. SOCKS5 сам по себе не гарантирует обход сетевых ограничений и не заменяет VLESS/Reality.
+Регистрация, вход в сеть, прямой TCP-канал и RTT уже были подтверждены пользователем на версии 0.1.1. Новая интеграция Xray проверяется синтетическими JVM-тестами, сборкой Android, проверкой HTML и запуском native Linux core с конфигурацией, сгенерированной тем же Kotlin-компилятором профилей. Это **не заменяет проверку VLESS/Reality на реальном Android и сервере провайдера**. Пользовательские серверы и данные доступа не используются в автоматических тестах.
 
-## Документация
+Radmin Viewer / удалённый рабочий стол, VLESS gRPC, AUTO fallback и обновление подписки по URL в 0.2 не реализованы. Пароли proxy, UUID и параметры профилей сохраняются через Android Keystore / EncryptedSharedPreferences, не возвращаются в HTML и не попадают в экспорт диагностики. Поле исходного JSON очищается после успешного импорта.
 
-- [Точная архитектура, маршрутизация и изменения](docs/ARCHITECTURE.ru.md)
-- [Проверка на Android и Windows](docs/TESTING.ru.md)
-- [Исходное техническое задание](docs/REQUEST.ru.txt)
-- [Состояние проверок](docs/VALIDATION.md)
-- [MIT LICENSE и авторство OpenRad](LICENSE)
+## Документация и исходная база
 
-Сохранённые Compose-экраны, тестовые mocks и upstream guides служат reference-кодом. MainActivity запускает WebView и EngineRepository; mock-данные пользователю не показываются. Upstream `AGENTS.md` описывает оригинальный монорепозиторий; в этом проекте корень соответствует его `clients/android/`.
+- [Xray 0.2: архитектура, импорт, защита сокетов, приёмка](docs/XRAY-0.2.ru.md)
+- [Историческая архитектура 0.1](docs/ARCHITECTURE.ru.md)
+- [Ручная проверка Android ↔ Windows](docs/TESTING.ru.md)
+- [Результаты автоматических проверок](docs/VALIDATION.md)
+- [Нативные зависимости, версии и лицензии](docs/NATIVE-DEPENDENCIES.md)
+
+Основа: [OpenRad](https://github.com/gringoestrangeiro/openrad) @ `47eb54f6b051aadc37260d405681b2111b50b7cc`, MIT. Протокол/криптография/identity/membership/L3Bridge сохранены. Встроенное ядро: [XTLS/libXray](https://github.com/XTLS/libXray) v26.10.10, API 3; Xray-core v26.10.10. Проект не связан с официальным Radmin или Happ.

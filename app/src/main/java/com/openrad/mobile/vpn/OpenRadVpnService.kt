@@ -61,7 +61,8 @@ class OpenRadVpnService : VpnService() {
     private val tunLock = Any()
     // Serializes Disconnect and the rename restart; while a restart is in
     // progress the watcher must not treat its intermediate STOPPED as the end.
-    private val lifecycle = Mutex()
+    private val lifecycle = EngineHost.lifecycle
+    private val desired = AtomicBoolean(false)
     @Volatile private var restarting = false
     @Volatile private var selectedTransport: com.openrad.mobile.transport.OutboundTransport = com.openrad.mobile.transport.DirectTransport()
     private val protector = object : SocketProtector {
@@ -89,76 +90,118 @@ class OpenRadVpnService : VpnService() {
                 EngineHost.updateConfig(debugEndpoint(this, engineConfig(PreferencesStore(this).settings())))
                 return START_STICKY
             }
-            else -> connect()
+            else -> {
+                desired.set(true)
+                EngineHost.sessionBusy = true
+                connect()
+            }
         }
         return START_STICKY
     }
 
     private fun connect() {
         startForegroundCompat(buildNotification(getString(R.string.status_connecting)))
-        val settings = PreferencesStore(this).settings()
-        try {
-            if (EngineHost.engine?.isRunning != true) {
-                selectedTransport = com.openrad.mobile.proxy.ProxyStore(this).load().transport()
-            }
-            EngineHost.start(this, debugEndpoint(this, engineConfig(settings)), protector)
-        } catch (e: Exception) {
-            EngineHost.emit("Unable to start: ${e.javaClass.simpleName}", true)
-            stopSelfCompat()
-            return
-        }
-        if (watcher?.isActive != true) {
-            watcher = scope.launch {
-                EngineHost.state
-                    .map { Triple(it.phase, it.vip, it.peers.count { p -> p.link == com.openrad.mobile.engine.LinkState.CONNECTED }) }
-                    .distinctUntilChanged()
-                    .collect { (phase, vip, connected) ->
-                        when (phase) {
-                            EngineState.Phase.ONLINE -> {
-                                if (vip != null && vip != synchronized(tunLock) { tunVip }) establish(vip)
-                                notify(getString(R.string.notification_online, Ip.format(vip ?: 0), connected))
-                            }
-                            EngineState.Phase.STOPPED, EngineState.Phase.ERROR -> {
-                                if (!restarting && EngineHost.engine?.isRunning != true) {
-                                    closeTun()
-                                    stopSelfCompat()
-                                }
-                            }
-                            else -> notify(getString(R.string.status_connecting))
-                        }
-                    }
+        scope.launch(Dispatchers.IO) {
+            lifecycle.withLock {
+                try { startLocked() } finally { EngineHost.sessionBusy = false }
             }
         }
     }
 
+    /** All native lifecycle calls run off main and under the process-wide session lock. */
+    private fun startLocked() {
+        if (!desired.get() || EngineHost.engine?.isRunning == true) return
+        EngineHost.connectionError = null
+        try {
+            val store = com.openrad.mobile.proxy.ProxyStore(this)
+            val config = store.load()
+            selectedTransport = if (config.mode == "XRAY") {
+                val profile = store.profiles().firstOrNull { it.id == config.profileId }
+                    ?: error("Xray profile not found")
+                com.openrad.mobile.xray.XrayRuntime.start(this, profile,
+                    { fd -> this@OpenRadVpnService.protect(fd) }, uplinkDns(), config.timeoutMs, protector)
+            } else {
+                com.openrad.mobile.xray.XrayRuntime.stop()
+                config.transport()
+            }
+            if (!desired.get()) {
+                com.openrad.mobile.xray.XrayRuntime.stop()
+                return
+            }
+            val settings = PreferencesStore(this).settings()
+            EngineHost.start(this, debugEndpoint(this, engineConfig(settings)), protector)
+            watchEngine()
+        } catch (e: Exception) {
+            EngineHost.connectionError = "Transport startup failed; see Diagnostics"
+            EngineHost.emit("Transport startup failed: ${e.javaClass.simpleName}", true)
+            EngineHost.stop()
+            closeTun()
+            com.openrad.mobile.xray.XrayRuntime.stop()
+            stopSelfCompat()
+        }
+    }
+
+    private fun uplinkDns(): String {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java)
+        val dns = cm.allNetworks.firstNotNullOfOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            if (caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
+                cm.getLinkProperties(network)?.dnsServers?.firstOrNull { !it.isLoopbackAddress && !it.isAnyLocalAddress && !it.isLinkLocalAddress }
+            } else null
+        }?.hostAddress ?: "1.1.1.1"
+        return if (':' in dns) "[$dns]:53" else "$dns:53"
+    }
+
+    private fun watchEngine() {
+        if (watcher?.isActive == true) return
+        watcher = scope.launch {
+            EngineHost.state
+                .map { Triple(it.phase, it.vip, it.peers.count { p -> p.link == com.openrad.mobile.engine.LinkState.CONNECTED }) }
+                .distinctUntilChanged()
+                .collect { (phase, vip, connected) ->
+                    when (phase) {
+                        EngineState.Phase.ONLINE -> {
+                            if (vip != null && vip != synchronized(tunLock) { tunVip }) establish(vip)
+                            notify(getString(R.string.notification_online, Ip.format(vip ?: 0), connected))
+                        }
+                        EngineState.Phase.STOPPED, EngineState.Phase.ERROR -> {
+                            if (!restarting && !EngineHost.sessionBusy && EngineHost.engine?.isRunning != true) disconnect()
+                        }
+                        else -> notify(getString(R.string.status_connecting))
+                    }
+                }
+        }
+    }
+
     private fun disconnect() {
-        scope.launch {
+        desired.set(false)
+        scope.launch(Dispatchers.IO) {
             lifecycle.withLock {
                 EngineHost.stop()
                 closeTun()
+                com.openrad.mobile.xray.XrayRuntime.stop()
+                EngineHost.sessionBusy = false
                 stopSelfCompat()
             }
         }
     }
 
-    /**
-     * Rename: same identity, new engine (like the daemon's Rename). Runs inside
-     * the service so the watcher cannot stop it between the old engine's
-     * STOPPED and the new engine's start.
-     */
     private fun reconnect() {
-        if (EngineHost.engine?.isRunning != true) return
+        desired.set(true)
+        EngineHost.sessionBusy = true
         restarting = true
         startForegroundCompat(buildNotification(getString(R.string.status_connecting)))
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             try {
                 lifecycle.withLock {
                     EngineHost.stop()
-                    // The new engine starts detached; ONLINE re-establishes the TUN for it.
                     closeTun()
-                    connect()
+                    com.openrad.mobile.xray.XrayRuntime.stop()
+                    startLocked()
                 }
             } finally {
+                EngineHost.sessionBusy = false
                 restarting = false
             }
         }
@@ -287,6 +330,20 @@ class OpenRadVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        desired.set(false)
+        // Finish serialized cleanup even when Android destroys the service unexpectedly.
+        Thread({
+            kotlinx.coroutines.runBlocking {
+                lifecycle.withLock {
+                    if (EngineHost.socketProtector === protector) {
+                        EngineHost.stop()
+                        com.openrad.mobile.xray.XrayRuntime.stop()
+                        EngineHost.sessionBusy = false
+                    }
+                }
+            }
+        }, "openrad-session-close").apply { isDaemon = true; start() }
+
         // Signal stop and close the fd synchronously (fast); join the reader on
         // a background thread so the main thread never blocks up to 1500 ms.
         val stale: Thread? = synchronized(tunLock) { closeTunLocked() }

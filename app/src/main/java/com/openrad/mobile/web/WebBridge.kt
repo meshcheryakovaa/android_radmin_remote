@@ -29,14 +29,15 @@ class WebBridge(
     private val scope: CoroutineScope,
     private val requestVpn: suspend () -> Boolean,
     private val export: suspend (String) -> Unit,
+    private val importFile: suspend () -> String?,
 ) {
     private val repository = EngineRepository(context, scope)
     private val settingsLock = Mutex()
     private val inflight = java.util.concurrent.atomic.AtomicInteger()
 
     fun receive(raw: String, reply: (String) -> Unit) {
-        if (raw.length > 16384 || inflight.incrementAndGet() > 16) {
-            if (raw.length <= 16384) inflight.decrementAndGet()
+        if (raw.length > 1100000 || inflight.incrementAndGet() > 16) {
+            if (raw.length <= 1100000) inflight.decrementAndGet()
             return
         }
         scope.launch {
@@ -49,11 +50,13 @@ class WebBridge(
                 val args = request.optJSONObject("args") ?: JSONObject()
                 val result = withContext(Dispatchers.IO) {
                     // Consent is user-driven; the request remains pending until they answer.
-                    if (method == "Radmin.connect") call(method, args) else withTimeout(45000) { call(method, args) }
+                    if (method in setOf("Radmin.connect", "Proxy.importFile")) call(method, args) else withTimeout(45000) { call(method, args) }
                 }
                 response.put("result", result ?: JSONObject.NULL)
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 response.put("error", "Operation timed out; see Diagnostics")
+            } catch (e: com.openrad.mobile.xray.ProfileImportException) {
+                response.put("error", e.message)
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 // Never echo request arguments, network passwords, or arbitrary exception messages.
@@ -67,7 +70,10 @@ class WebBridge(
     }
 
     private fun ensureStopped() {
-        check(EngineHost.engine?.isRunning != true) { "Disconnect before changing proxy" }
+        if (EngineHost.engine?.isRunning == true || EngineHost.sessionBusy ||
+            com.openrad.mobile.xray.XrayRuntime.phase in setOf("READY", "STARTING", "STOPPING")) {
+            throw com.openrad.mobile.xray.ProfileImportException("Сначала отключите VPN, затем меняйте профиль или proxy")
+        }
     }
 
     private suspend fun call(method: String, a: JSONObject): Any? = when (method) {
@@ -103,28 +109,58 @@ class WebBridge(
                 context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("VPN IP", peer.vip))
             }; true
         }
-        "Proxy.getConfig" -> ProxyStore(context).load().json()
+        "Proxy.getConfig" -> proxySettings(ProxyStore(context))
+        "Proxy.importJson", "Proxy.importFile" -> {
+            // A user may spend time in the document picker; don't hold the session lock there.
+            val text = if (method == "Proxy.importFile") importFile() else a.getString("text")
+            if (text == null) JSONObject().put("cancelled", true) else settingsLock.withLock {
+                EngineHost.lifecycle.withLock {
+                    ensureStopped()
+                    ProxyStore(context).importProfiles(text)
+                }
+            }
+        }
         "Proxy.setConfig" -> settingsLock.withLock {
-            ensureStopped()
-            val store = ProxyStore(context)
-            val config = ProxyConfig.from(a, store.load())
-            store.save(config); config.json()
+            EngineHost.lifecycle.withLock {
+                ensureStopped()
+                val store = ProxyStore(context)
+                val config = ProxyConfig.from(a, store.load())
+                store.save(config); proxySettings(store)
+            }
         }
         "Proxy.enable", "Proxy.disable" -> settingsLock.withLock {
-            ensureStopped()
-            val store = ProxyStore(context)
-            val old = store.load()
-            val config = ProxyConfig.from(old.json(true).put("mode", if (method == "Proxy.enable") "PROXY" else "DIRECT"))
-            store.save(config); config.json()
+            EngineHost.lifecycle.withLock {
+                ensureStopped()
+                val store = ProxyStore(context)
+                val old = store.load()
+                val mode = if (method == "Proxy.disable") "DIRECT" else if (old.profileId.isNotEmpty()) "XRAY" else "PROXY"
+                store.save(ProxyConfig.from(old.json(true).put("mode", mode)))
+                proxySettings(store)
+            }
         }
         "Proxy.test" -> {
             val store = ProxyStore(context)
             val config = if (a.length() == 0) store.load() else ProxyConfig.from(a, store.load())
             val started = System.nanoTime()
-            config.transport().connectTcp(Protocol.DEFAULT_HOST, Protocol.DEFAULT_PORT, config.timeoutMs,
-                EngineHost.socketProtector, null).use { }
-            JSONObject().put("ok", true).put("latencyMs", (System.nanoTime() - started) / 1000000)
-                .put("scope", "TCP CONNECT only; OpenRad authentication not tested")
+            val transport = if (config.mode == "XRAY") {
+                if (EngineHost.engine?.isRunning == true && EngineHost.transportLabel == "XRAY_VLESS_REALITY" &&
+                    config.profileId == store.load().profileId) EngineHost.socketProtector?.outboundTransport else null
+            } else config.transport()
+            if (transport == null || (config.mode == "XRAY" &&
+                    EngineHost.state.value.phase != com.openrad.mobile.engine.EngineState.Phase.ONLINE))
+                JSONObject().put("requiresConnect", true)
+                    .put("message", "Сохраните выбранный профиль и дождитесь CONNECTED на Главной. Затем проверьте PING до ПК.")
+            else if (config.mode == "XRAY") {
+                // A SOCKS CONNECT reply alone does not prove the remote Reality handshake.
+                // The existing authenticated OpenRad control session proves that path instead.
+                JSONObject().put("ok", true).put("xraySession", true).put("latencyMs", EngineHost.state.value.latencyMs)
+                    .put("scope", "Existing authenticated OpenRad control session through Xray; peer channels must be tested separately")
+            } else {
+                transport.connectTcp(Protocol.DEFAULT_HOST, Protocol.DEFAULT_PORT, config.timeoutMs,
+                    EngineHost.socketProtector, null).use { }
+                JSONObject().put("ok", true).put("latencyMs", (System.nanoTime() - started) / 1000000)
+                    .put("scope", "TCP CONNECT only; OpenRad authentication not tested")
+            }
         }
         "Settings.get" -> JSONObject().put("nodeName", repository.settings.value.nodeName)
             .put("autoReconnect", repository.settings.value.autoReconnect)
@@ -145,6 +181,9 @@ class WebBridge(
         else -> throw IllegalArgumentException("unknown method")
     }
 
+    private fun proxySettings(store: ProxyStore) = store.load().json()
+        .put("profiles", JSONArray(store.profiles().map { it.summary() }))
+
     private fun publicNetworks() = JSONObject().put("items", JSONArray(repository.publicResults.value.map {
         JSONObject().put("name", it.name).put("members", it.reportedCount).put("joined", it.joined)
     })).put("hasMore", repository.publicHasMore.value)
@@ -152,7 +191,9 @@ class WebBridge(
     private fun state(): JSONObject {
         val s = repository.snapshot.value
         val status = repository.status.value
-        return JSONObject().put("phase", status.phase.name).put("message", status.message)
+        return JSONObject().put("phase", if (EngineHost.sessionBusy) "CONNECTING" else if (EngineHost.connectionError != null) "ERROR" else status.phase.name)
+            .put("message", EngineHost.connectionError ?: status.message)
+            .put("xray", com.openrad.mobile.xray.XrayRuntime.status())
             .put("vpnReady", s.interfaceReady).put("interfaceError", s.interfaceError ?: JSONObject.NULL)
             .put("ip", s.vip ?: JSONObject.NULL).put("nodeName", s.nodeName ?: repository.settings.value.nodeName)
             .put("transport", if (EngineHost.engine?.isRunning == true) EngineHost.transportLabel else "NONE")
@@ -178,9 +219,11 @@ class WebBridge(
             else -> "unavailable"
         }
         val config = ProxyStore(context).load()
+        val profile = if (config.mode == "XRAY") ProxyStore(context).profiles().firstOrNull { it.id == config.profileId } else null
         return state().put("uplink", uplink).put("route", "26.0.0.0/8").put("mtu", 1500)
-            .put("proxy", JSONObject().put("mode", config.mode).put("host", config.host).put("port", config.port))
-            .put("udpPolicy", if (EngineHost.transportLabel == "SOCKS5") "disabled; TCP relay only" else "upstream Wi-Fi policy")
+            .put("proxy", JSONObject().put("mode", config.mode).put("host", profile?.host ?: config.host).put("port", profile?.port ?: config.port)
+                .put("profileName", profile?.name ?: JSONObject.NULL))
+            .put("udpPolicy", if (EngineHost.transportLabel in setOf("SOCKS5", "XRAY_VLESS_REALITY")) "disabled; TCP relay only" else "upstream Wi-Fi policy")
             .put("logs", DiagnosticLog.json()).put("activity", JSONArray(repository.activity.value.map {
                 JSONObject().put("message", it.text).put("error", it.isError)
             }))

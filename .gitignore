@@ -31,3 +31,9 @@ reports/
 *.log
 debug-endpoint.json
 emulator-endpoint.json
+
+# Pinned native dependencies: fetched and hash-verified by scripts/setup-xray.py
+app/libs/*.aar
+
+__pycache__/
+*.pyc

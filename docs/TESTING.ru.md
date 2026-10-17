@@ -32,3 +32,7 @@ node --check app/src/main/assets/www/app.js
 ## Визуальная проверка в среде разработки
 
 Выполнена проверка шести экранов в headless Chromium на ширине 390 px с синтетическим bridge fixture. Скриншоты главной и proxy-формы сохранены в `docs/screenshots/`. Это проверка HTML layout и безопасного отображения имён peer, не Android networking test.
+
+## Дополнение 0.2: Xray
+
+Полная приёмка Xray, импорта и защиты native сокетов описана в [XRAY-0.2.ru.md](XRAY-0.2.ru.md). Локальный native smoke test проверяет Linux core той же версии на loopback и не заменяет Android JNI/VPN/провайдерскую проверку.
