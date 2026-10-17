@@ -1,0 +1,55 @@
+name: Android APK
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install SDK 34
+        run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - name: Verify JavaScript
+        run: node --check app/src/main/assets/www/app.js
+      - name: Unit tests and debug APK
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --stacktrace
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-radmin-remote-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
+      - name: Publish downloadable debug APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mvp-debug
+          target_commitish: ${{ github.sha }}
+          name: Android Radmin Remote · MVP debug
+          prerelease: true
+          files: app/build/outputs/apk/debug/app-debug.apk
+          fail_on_unmatched_files: true
+          body: |
+            Debug prototype: local HTML UI, OpenRad engine, Direct / SOCKS5 TCP relay.
+            VLESS/Reality and AUTO are not implemented. Real Android/Windows interoperability requires manual validation.
+            Install app-debug.apk on Android 8.0+. See README for configuration.

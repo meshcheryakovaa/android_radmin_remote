@@ -1,0 +1,666 @@
+Ты senior Android/network developer. Нужно спроектировать и реализовать рабочий прототип Android-приложения, которое подключает Android-устройство к существующим сетям Radmin VPN через открытую реализацию протокола OpenRad, при этом исходящие соединения OpenRad должны иметь возможность работать через прокси-транспорт.
+
+Цель первого этапа:
+
+Android APK
+→ HTML/CSS/JS интерфейс
+→ Kotlin bridge
+→ OpenRad Android engine
+→ Proxy transport
+→ Интернет
+→ инфраструктура Radmin VPN
+→ существующая сеть Radmin VPN
+→ узлы 26.0.0.0/8
+
+Главное требование: приложение должно быть единым APK. Не использовать одновременно отдельные приложения Happ + OpenRad. Не должно быть конфликта двух Android VpnService.
+
+В качестве исходной реализации Radmin VPN использовать проект:
+
+https://github.com/gringoestrangeiro/openrad
+
+Особое внимание уделить Android-клиенту:
+
+clients/android/
+
+Не писать протокол Radmin VPN заново, если соответствующая функциональность уже существует в OpenRad.
+
+---
+
+# 1. Основная архитектура
+
+Приложение должно состоять из четырёх основных уровней.
+
+## UI
+
+HTML + CSS + JavaScript.
+
+HTML должен запускаться локально внутри Android WebView.
+
+Основной интерфейс реализовать именно в HTML, а не Jetpack Compose.
+
+Минимальные экраны:
+
+1. Главная.
+2. Сети.
+3. Устройства.
+4. Proxy.
+5. Настройки.
+6. Диагностика.
+
+Главный экран должен отображать:
+
+- статус приложения;
+- статус proxy;
+- статус соединения с Radmin/OpenRad;
+- полученный VPN IP 26.x.x.x;
+- название устройства;
+- активную Radmin-сеть;
+- число доступных peer;
+- входящий/исходящий трафик;
+- текущий транспорт:
+  - direct;
+  - proxy;
+  - relay.
+
+Кнопки:
+
+- Подключиться;
+- Отключиться;
+- Переподключиться.
+
+---
+
+# 2. HTML ↔ Android bridge
+
+Создать безопасный JS/Kotlin bridge.
+
+HTML должен иметь API примерно следующего уровня:
+
+Radmin.connect()
+Radmin.disconnect()
+Radmin.reconnect()
+
+Radmin.getState()
+
+Radmin.getNetworks()
+Radmin.joinNetwork(name, password)
+Radmin.leaveNetwork(id)
+
+Radmin.getPeers()
+Radmin.pingPeer(id)
+
+Proxy.getConfig()
+Proxy.setConfig(config)
+Proxy.test()
+Proxy.enable()
+Proxy.disable()
+
+Diagnostics.getLogs()
+Diagnostics.clearLogs()
+
+Не обязательно использовать именно такие сигнатуры — предложи архитектурно лучший вариант.
+
+Желательно использовать асинхронную модель:
+
+request ID
+→ Kotlin
+→ результат
+→ Promise в JavaScript.
+
+Не блокировать WebView.
+
+---
+
+# 3. OpenRad
+
+Использовать существующий Android engine проекта OpenRad.
+
+Изучить:
+
+clients/android/app/src/main/java/com/openrad/mobile/engine/
+
+В частности:
+
+Wire.kt
+Crypto.kt
+Protocol.kt
+Tunnel.kt
+Transport.kt
+Engine.kt
+EngineState.kt
+
+а также:
+
+clients/android/app/src/main/java/com/openrad/mobile/vpn/OpenRadVpnService.kt
+
+Сохранить максимум существующей реализации.
+
+Не переписывать:
+
+- протокол;
+- криптографию;
+- identity provisioning;
+- управление Radmin-сетями;
+- peer handshake;
+- relay;
+- tunnel;
+- L3Bridge,
+
+если эти части уже реализованы OpenRad.
+
+---
+
+# 4. Android VPN
+
+Использовать только ОДИН Android VpnService.
+
+VpnService должен создавать TUN примерно с параметрами:
+
+VPN IP:
+26.x.x.x
+
+Route:
+26.0.0.0/8
+
+MTU:
+1500
+
+Не направлять весь интернет телефона через Radmin.
+
+Через Radmin должен идти преимущественно трафик:
+
+26.0.0.0/8
+
+Обычный интернет Android должен продолжать работать через обычное подключение или через выбранную proxy-политику.
+
+Не создавать второй VpnService.
+
+---
+
+# 5. Proxy transport
+
+Это ключевая часть проекта.
+
+OpenRad сейчас создаёт собственные TCP/UDP-соединения.
+
+Нужно абстрагировать транспортный слой.
+
+Ввести интерфейс условного вида:
+
+interface OutboundTransport {
+    connectTcp(host, port)
+    connectUdp(...)
+}
+
+Реализовать минимум:
+
+DirectTransport
+
+и:
+
+ProxyTransport
+
+DirectTransport работает как существующий OpenRad.
+
+ProxyTransport отправляет управляющие TCP-соединения OpenRad через прокси.
+
+Первый прототип желательно сделать через наиболее простой transport, например:
+
+SOCKS5
+
+а затем предусмотреть архитектуру для:
+
+VLESS
+VLESS + Reality
+Trojan
+Shadowsocks
+
+Если полноценное внедрение Xray/sing-box в первый прототип слишком значительно усложняет проект, сначала реализовать:
+
+OpenRad
+→ SOCKS5
+→ внешний proxy
+
+Но архитектура должна позволять позже заменить SOCKS5 на VLESS/Reality.
+
+---
+
+# 6. Важная проблема VpnService.protect()
+
+Учитывать существующее использование:
+
+VpnService.protect(socket)
+
+в OpenRad.
+
+Нужно не допустить петли вида:
+
+OpenRad socket
+→ TUN
+→ OpenRad
+→ TUN
+→ ...
+
+Чётко определить, какие сокеты должны:
+
+- проходить через TUN;
+- bypass TUN;
+- отправляться через proxy.
+
+Прокси-соединение должно физически выходить в интернет через обычный Android uplink.
+
+Опиши маршрутизацию подробно.
+
+---
+
+# 7. Режимы подключения
+
+Предусмотреть три режима:
+
+DIRECT
+
+OpenRad
+→ интернет
+→ Radmin infrastructure
+
+PROXY
+
+OpenRad
+→ proxy
+→ интернет
+→ Radmin infrastructure
+
+AUTO
+
+Попытка direct.
+
+Если direct не работает:
+
+fallback → proxy.
+
+В интерфейсе показывать, какой путь используется реально.
+
+---
+
+# 8. Настройка proxy
+
+HTML-форма:
+
+Тип:
+Direct
+SOCKS5
+VLESS
+VLESS Reality
+
+Адрес сервера
+
+Порт
+
+UUID / login
+
+Password
+
+SNI
+
+Public Key
+
+Short ID
+
+Fingerprint
+
+Flow
+
+Allow insecure
+
+Timeout
+
+Кнопки:
+
+Сохранить
+Проверить
+Подключить
+
+Необязательно реализовывать все поля сразу.
+
+Первый рабочий вариант можно ограничить:
+
+SOCKS5 host
+SOCKS5 port
+username
+password
+
+Но модель настроек должна быть расширяемой.
+
+---
+
+# 9. Radmin-сети
+
+В HTML реализовать экран сетей.
+
+Пример:
+
+Мои сети
+
+TKTT
+Подключено
+15 устройств
+
+HOME
+Отключено
+5 устройств
+
+Добавить:
+
+[ Найти сеть ]
+[ Подключиться к приватной сети ]
+
+Поддержать:
+
+- публичные сети;
+- приватные сети;
+- имя сети;
+- пароль;
+- join;
+- leave;
+- список peer.
+
+---
+
+# 10. Peer
+
+Для каждого peer отображать:
+
+Имя
+Radmin/OpenRad IP
+26.x.x.x
+online/offline
+ping
+transport
+direct/relay
+объём трафика
+
+Действия:
+
+PING
+Скопировать IP
+
+В будущем:
+
+Удалённое управление
+
+но Radmin Viewer на этом этапе НЕ реализовывать.
+
+---
+
+# 11. Диагностика
+
+Добавить подробный экран диагностики.
+
+Отображать:
+
+Android uplink
+Wi-Fi / mobile
+
+Radmin VPN IP
+
+proxy status
+
+proxy endpoint
+
+control server status
+
+Radmin network status
+
+peer count
+
+routes
+
+TUN status
+
+TCP errors
+
+UDP errors
+
+relay status
+
+последние ошибки
+
+логи engine
+
+Кнопки:
+
+Копировать диагностику
+Очистить
+Экспортировать TXT
+
+Пароли и приватные ключи в диагностике скрывать.
+
+---
+
+# 12. Безопасность
+
+Не хранить пароль приватной сети Radmin без необходимости.
+
+Proxy credentials хранить через:
+
+Android Keystore
+или
+EncryptedSharedPreferences.
+
+Не выводить:
+
+password
+UUID при необходимости
+private key
+
+в обычные логи.
+
+JS bridge должен быть доступен только локальному HTML приложения.
+
+Не разрешать произвольным внешним сайтам использовать native bridge.
+
+---
+
+# 13. Структура проекта
+
+Предложи примерно такую структуру:
+
+app/
+
+src/main/
+
+java/.../
+
+MainActivity.kt
+
+web/
+WebBridge.kt
+WebMessage.kt
+
+vpn/
+OpenRadVpnService.kt
+VpnController.kt
+
+engine/
+существующие классы OpenRad
+
+transport/
+OutboundTransport.kt
+DirectTransport.kt
+Socks5Transport.kt
+ProxyTransportFactory.kt
+
+proxy/
+ProxyConfig.kt
+ProxyManager.kt
+
+data/
+SettingsStore.kt
+
+assets/
+
+www/
+index.html
+app.js
+style.css
+
+---
+
+# 14. UI
+
+Сделать адаптивный мобильный интерфейс.
+
+Стиль:
+
+тёмный;
+минималистичный;
+технический;
+современный.
+
+Не использовать Bootstrap.
+
+Можно использовать чистые HTML/CSS/JS.
+
+Главная страница примерно:
+
+RADMIN MOBILE
+
+VPN
+● Connected
+
+IP
+26.54.12.93
+
+Transport
+● SOCKS5 Proxy
+
+Network
+TKTT
+
+Peers
+18 online
+
+Traffic
+↓ 12.4 MB
+↑ 3.8 MB
+
+[ DISCONNECT ]
+
+Ниже:
+
+Networks
+Peers
+Proxy
+Diagnostics
+Settings
+
+---
+
+# 15. Что НЕ делать
+
+Не использовать два Android VpnService.
+
+Не запускать отдельное приложение Happ.
+
+Не запускать Winlator.
+
+Не запускать Windows Radmin VPN через эмулятор.
+
+Не переписывать Radmin VPN protocol с нуля.
+
+Не заменять Radmin VPN собственной WebRTC VPN.
+
+Не создавать mock-приложение, которое только показывает интерфейс.
+
+Нужен реальный networking prototype.
+
+---
+
+# 16. Первый MVP
+
+Сначала сделать минимальную версию:
+
+1. Android WebView запускает локальный HTML.
+2. HTML взаимодействует с Kotlin.
+3. OpenRad engine запускается.
+4. Android выдаёт VPN permission.
+5. Получается 26.x.x.x.
+6. Можно подключиться к Radmin-сети.
+7. Можно увидеть peer.
+8. Можно ping peer.
+9. Работает direct transport.
+10. Добавляется SOCKS5 transport.
+11. Можно переключаться:
+    Direct / SOCKS5.
+12. SOCKS5 transport реально используется OpenRad control/peer connections там, где это технически возможно.
+
+Только после рабочего MVP добавлять:
+
+VLESS
+Reality
+автоматический fallback
+расширенную маршрутизацию.
+
+---
+
+# 17. Результат
+
+Нужен не только концепт.
+
+Сначала:
+
+1. Изучи текущий OpenRad.
+2. Определи минимальный набор файлов Android-клиента, который надо сохранить.
+3. Определи места в Transport.kt / Engine.kt, где нужно внедрить transport abstraction.
+4. Нарисуй точную архитектуру.
+5. Перечисли изменения по файлам.
+6. После этого реализуй код.
+
+Если репозиторий доступен локально, работай непосредственно с ним.
+
+Не создавай новый engine вместо OpenRad без необходимости.
+
+После каждого существенного этапа проверяй:
+
+./gradlew :app:testDebugUnitTest
+
+и:
+
+./gradlew :app:assembleDebug
+
+Итог должен собираться в:
+
+app-debug.apk
+
+---
+
+# 18. Главный критерий успеха
+
+На Android:
+
+1. Пользователь запускает одно приложение.
+2. Нажимает Connect.
+3. Приложение подключается через выбранный proxy.
+4. Получает Radmin/OpenRad IP вида:
+
+26.x.x.x
+
+5. Подключается к существующей Radmin VPN network.
+6. Видит Windows-компьютеры, подключённые обычным Radmin VPN.
+7. Может обращаться к их IP:
+
+26.x.x.x
+
+8. Остальной интернет телефона продолжает работать.
+
+Главный принцип архитектуры:
+
+HTML — интерфейс.
+
+Kotlin — Android integration.
+
+OpenRad — Radmin protocol engine.
+
+Proxy transport — способ доставки соединений OpenRad через доступный внешний канал.
+
+VpnService — единственная системная VPN-сессия Android.
