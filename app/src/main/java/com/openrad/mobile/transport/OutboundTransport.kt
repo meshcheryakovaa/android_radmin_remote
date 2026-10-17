@@ -24,6 +24,9 @@ class DirectTransport : OutboundTransport {
         if (stop?.get() == true) throw CancelledException()
         val socket = Socket()
         try {
+            // Android creates the native descriptor lazily. Materialize it by binding
+            // locally before protect(), but never connect/send before protection succeeds.
+            socket.bind(InetSocketAddress(0))
             if (protector != null && !protector.protect(socket)) throw IOException("socket protection failed")
             socket.connect(InetSocketAddress(host, port), timeoutMs)
             if (stop?.get() == true) throw CancelledException()

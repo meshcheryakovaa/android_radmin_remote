@@ -2,7 +2,7 @@
 
 Единый Android APK: локальный **HTML/CSS/JS интерфейс → Kotlin bridge → существующий OpenRad engine → Direct / SOCKS5 → Radmin VPN**.
 
-Прототип 0.1.0, Android 8.0+ (API 26), JDK 17. Основа — [OpenRad](https://github.com/gringoestrangeiro/openrad), MIT, зафиксирован commit `47eb54f6b051aadc37260d405681b2111b50b7cc`. Проект не связан с официальным Radmin.
+Прототип 0.1.1, Android 8.0+ (API 26), JDK 17. Основа — [OpenRad](https://github.com/gringoestrangeiro/openrad), MIT, зафиксирован commit `47eb54f6b051aadc37260d405681b2111b50b7cc`. Проект не связан с официальным Radmin.
 
 ## Что реализовано
 
@@ -17,7 +17,7 @@ VLESS/Reality и AUTO fallback **не реализованы**. Это VPN trans
 
 ## Скачать APK
 
-После успешной сборки APK доступен напрямую в [Releases → MVP debug](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/mvp-debug).
+После успешной сборки APK доступен напрямую в [Releases → 0.1.1 debug](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/v0.1.1-debug).
 
 Также откройте [Actions → Android APK](https://github.com/meshcheryakovaa/android_radmin_remote/actions/workflows/android.yml), выберите успешный запуск для `main` и скачайте artifact **android-radmin-remote-debug**. Распакуйте ZIP и установите `app-debug.apk`. Для загрузки artifacts GitHub обычно требует вход в аккаунт. Debug APK подписывается тестовым ключом; production signing хранится отдельно от репозитория.
 

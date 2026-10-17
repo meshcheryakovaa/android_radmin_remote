@@ -19,3 +19,9 @@ Local build/test results are recorded here before publication. Real Android/Wind
 The local APK is debug-signed with a local development key. CI signs with its own debug key, so a CI APK can have a different checksum/signature. Remove a locally signed test install before installing an APK from a different build host if Android reports a signing mismatch.
 
 Not executed: real Android install, on-device WebView/VPN consent, Windows interoperability, real proxy endpoint, Wi-Fi/mobile handover or network restriction tests. These remain the manual acceptance checklist, not claimed passes.
+
+## 0.1.1: Android socket descriptor fix
+
+TCP now binds an ephemeral local port before VpnService.protect(), so Android has a native socket descriptor. Protection still occurs before connect, for both DIRECT and SOCKS5. Regressions check bound/unconnected state at protect and closure after rejection. Real on-device confirmation is pending.
+
+0.1.1 local validation: testDebugUnitTest + assembleDebug succeeded; 135 passed, 1 skipped, zero failures/errors.

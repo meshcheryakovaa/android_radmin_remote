@@ -46,13 +46,14 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: mvp-debug
+          tag_name: v0.1.1-debug
           target_commitish: ${{ github.sha }}
-          name: Android Radmin Remote · MVP debug
+          name: Android Radmin Remote 0.1.1 · debug
           prerelease: true
           files: app/build/outputs/apk/debug/app-debug.apk
           fail_on_unmatched_files: true
           body: |
+            Fix Android socket protection: bind before protect and connect.
             Debug prototype: local HTML UI, OpenRad engine, Direct / SOCKS5 TCP relay.
             VLESS/Reality and AUTO are not implemented. Real Android/Windows interoperability requires manual validation.
             Install app-debug.apk on Android 8.0+. See README for configuration.

@@ -55,7 +55,7 @@ class Socks5TransportTest {
             var protected = false
             val p = object : SocketProtector {
                 override val outboundTransport = Socks5Transport("127.0.0.1",port)
-                override fun protect(socket: Socket): Boolean { assertFalse(socket.isConnected); protected=true; return true }
+                override fun protect(socket: Socket): Boolean { assertTrue("native socket must exist before protection", socket.isBound); assertFalse(socket.isConnected); protected=true; return true }
                 override fun protect(socket: DatagramSocket) = true
             }
             val framed = Framed.connect("26.10.20.30",5000,3000,p,AtomicBoolean(false))
@@ -100,13 +100,40 @@ class Socks5TransportTest {
             catch(e: IOException) { assertTrue(e.message.orEmpty().contains("refused")) }
         }
     }
+    @Test fun directBindsBeforeProtectAndConnectsOnlyAfterApproval() {
+        proxy({ s -> s.getOutputStream().write(42) }) { port ->
+            var checked = false
+            val p = object : SocketProtector {
+                override fun protect(socket: Socket): Boolean {
+                    assertTrue(socket.isBound)
+                    assertTrue(socket.localPort > 0)
+                    assertFalse(socket.isConnected)
+                    checked = true
+                    return true
+                }
+                override fun protect(socket: DatagramSocket) = true
+            }
+            DirectTransport().connectTcp("127.0.0.1", port, 3000, p, null).use {
+                assertTrue(checked)
+                assertEquals(42, it.getInputStream().read())
+            }
+        }
+    }
+
     @Test fun failedProtectPreventsConnection() {
+        var attempted: Socket? = null
         val protector = object : SocketProtector {
-            override fun protect(socket: Socket) = false
+            override fun protect(socket: Socket): Boolean {
+                assertTrue(socket.isBound)
+                assertFalse(socket.isConnected)
+                attempted = socket
+                return false
+            }
             override fun protect(socket: DatagramSocket) = false
         }
         try { DirectTransport().connectTcp("127.0.0.1",1,100,protector,null);fail("protection failure ignored") }
         catch(e: IOException) { assertEquals("socket protection failed",e.message) }
+        assertTrue("failed protection must close the socket", attempted?.isClosed == true)
     }
     @Test fun handshakeDeadlineClosesSocket() {
         proxy({ s -> val b=ByteArray(3);DataInputStream(s.getInputStream()).readFully(b); assertEquals(-1,s.getInputStream().read()) }) { port ->
