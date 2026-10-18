@@ -34,14 +34,34 @@ class MainActivity : ComponentActivity() {
         importResult = null
     }
 
-    private suspend fun readImportFile(): String? {
-        val uri = withContext(Dispatchers.Main) {
+    private suspend fun pickDocument(): Uri? {
+        return withContext(Dispatchers.Main) {
             check(importResult == null) { "Import already pending" }
             val pending = CompletableDeferred<Uri?>()
             importResult = pending
             importDocument.launch(arrayOf("*/*"))
             try { pending.await() } finally { if (importResult === pending) importResult = null }
-        } ?: return null
+        }
+    }
+    private suspend fun readTransferFile(): com.openrad.mobile.remote.RemoteManager.TransferFile? {
+        val uri = pickDocument() ?: return null
+        return withContext(Dispatchers.IO) {
+            var name = "file.bin"; var size = -1L
+            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val n = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val z = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (n >= 0 && !cursor.isNull(n)) name = cursor.getString(n)
+                    if (z >= 0 && !cursor.isNull(z)) size = cursor.getLong(z)
+                }
+            }
+            com.openrad.mobile.remote.RemoteManager.TransferFile(name, size) {
+                contentResolver.openInputStream(uri) ?: throw com.openrad.mobile.remote.RemoteError("INVALID_FILE")
+            }
+        }
+    }
+    private suspend fun readImportFile(): String? {
+        val uri = pickDocument() ?: return null
         return withContext(Dispatchers.IO) {
             val max = com.openrad.mobile.xray.XrayImport.MAX_BYTES
             contentResolver.openInputStream(uri)?.use { input ->
@@ -126,7 +146,7 @@ class MainActivity : ComponentActivity() {
                 exportText = text
                 export.launch("radmin-diagnostics.txt")
             }
-        }, ::readImportFile)
+        }, ::readImportFile, ::readTransferFile)
         WebViewCompat.addWebMessageListener(web, "Native", setOf(ORIGIN)) { _, message, origin, mainFrame, reply ->
             if (mainFrame && origin.toString() == ORIGIN) {
                 bridge.receive(message.data.orEmpty()) { response -> reply.postMessage(response) }

@@ -30,6 +30,7 @@ class WebBridge(
     private val requestVpn: suspend () -> Boolean,
     private val export: suspend (String) -> Unit,
     private val importFile: suspend () -> String?,
+    private val transferFile: suspend () -> com.openrad.mobile.remote.RemoteManager.TransferFile?,
 ) {
     private val repository = EngineRepository(context, scope)
     private val settingsLock = Mutex()
@@ -51,7 +52,7 @@ class WebBridge(
                 val args = request.optJSONObject("args") ?: JSONObject()
                 val result = withContext(Dispatchers.IO) {
                     // Consent is user-driven; the request remains pending until they answer.
-                    if (method in setOf("Radmin.connect", "Proxy.importFile", "Remote.importKey")) call(method, args) else withTimeout(45000) { call(method, args) }
+                    if (method in setOf("Radmin.connect", "Proxy.importFile", "Remote.importKey", "Remote.chooseFile")) call(method, args) else withTimeout(45000) { call(method, args) }
                 }
                 response.put("result", result ?: JSONObject.NULL)
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -83,6 +84,11 @@ class WebBridge(
         "Remote.getConfig" -> remote.config()
         "Remote.saveConfig" -> remote.save(a)
         "Remote.importKey" -> importFile()?.let { remote.importKey(it) } ?: JSONObject().put("cancelled", true)
+        "Remote.chooseFile" -> transferFile()?.let { remote.prepareFile(it) } ?: JSONObject().put("cancelled", true)
+        "Remote.discardFile" -> { remote.discardFile(); true }
+        "Remote.startBatch" -> remote.startBatch(a)
+        "Remote.batchStatus" -> remote.batchStatus()
+        "Remote.cancelBatch" -> remote.cancelBatch()
         "Remote.grid" -> remote.grid(a.getBoolean("enabled"))
         "Remote.lock" -> remote.lock(a.getLong("rid"), a.getBoolean("enabled"))
         "Remote.open" -> remote.open(a.getLong("rid"))

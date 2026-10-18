@@ -8,7 +8,7 @@
     if (!native) return Promise.reject(new Error('Откройте этот интерфейс внутри Android APK. Браузер не подключается к VPN.'));
     return new Promise((resolve, reject) => {
       const id = String(++serial);
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('Нет ответа. Проверьте разрешение VPN и диагностику.')); }, ['Radmin.connect','Proxy.importFile','Remote.importKey'].includes(method) ? 300000 : 50000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('Нет ответа. Проверьте разрешение VPN и диагностику.')); }, ['Radmin.connect','Proxy.importFile','Remote.importKey','Remote.chooseFile'].includes(method) ? 300000 : 50000);
       pending.set(id, {resolve, reject, timer});
       native.postMessage(JSON.stringify({id, method, args}));
     });

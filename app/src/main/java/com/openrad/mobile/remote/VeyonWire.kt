@@ -39,34 +39,46 @@ object VeyonWire {
         }
         return result
     }
+    private fun string(output: DataOutputStream, value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_16BE)
+        if (bytes.size > MAX_MESSAGE) throw RemoteError("INVALID_MESSAGE")
+        output.writeInt(bytes.size); output.write(bytes)
+    }
+    private fun variant(output: DataOutputStream, value: Any, depth: Int = 0) {
+        if (depth > 3) throw RemoteError("INVALID_MESSAGE")
+        val type = when (value) { is Boolean -> 1; is Int -> 2; is Long -> 4; is String -> 10
+            is ByteArray -> 12; is java.util.UUID -> 30; is Map<*, *> -> 8; else -> throw RemoteError("INVALID_MESSAGE") }
+        output.writeInt(type); output.writeByte(0)
+        when (value) {
+            is Boolean -> output.writeBoolean(value)
+            is Int -> output.writeInt(value)
+            is Long -> output.writeLong(value)
+            is String -> string(output, value)
+            is ByteArray -> { if (value.size > MAX_MESSAGE) throw RemoteError("INVALID_MESSAGE"); output.writeInt(value.size); output.write(value) }
+            is java.util.UUID -> { output.writeLong(value.mostSignificantBits); output.writeLong(value.leastSignificantBits) }
+            is Map<*, *> -> {
+                if (value.size > 32 || value.keys.any { it !is String }) throw RemoteError("INVALID_MESSAGE")
+                output.writeInt(value.size)
+                value.entries.sortedBy { it.key as String }.forEach { (key, v) ->
+                    string(output, key as String); variant(output, v ?: throw RemoteError("INVALID_MESSAGE"), depth + 1)
+                }
+            }
+        }
+    }
     fun send(output: DataOutputStream, vararg values: Any) {
         val bytes = ByteArrayOutputStream()
-        DataOutputStream(bytes).use { stream -> values.forEach { value ->
-            when (value) {
-                is Int -> { stream.writeInt(2); stream.writeByte(0); stream.writeInt(value) }
-                is String -> {
-                    val data = value.toByteArray(Charsets.UTF_16BE)
-                    stream.writeInt(10); stream.writeByte(0); stream.writeInt(data.size); stream.write(data)
-                }
-                is ByteArray -> { stream.writeInt(12); stream.writeByte(0); stream.writeInt(value.size); stream.write(value) }
-                else -> throw RemoteError("INVALID_MESSAGE")
-            }
-        } }
+        DataOutputStream(bytes).use { stream -> values.forEach { variant(stream, it) } }
         if (bytes.size() > MAX_MESSAGE) throw RemoteError("INVALID_MESSAGE")
         output.writeInt(bytes.size()); bytes.writeTo(output); output.flush()
     }
-    /** Fixed Veyon ScreenLock feature: UUID QVariant, signed command, empty QVariantMap. */
-    fun screenLock(output: DataOutputStream, enabled: Boolean) {
+    fun feature(output: DataOutputStream, uid: java.util.UUID, command: Int = 0, arguments: Map<String, Any> = emptyMap()) {
+        // Serialize before writing the RFB discriminator, so validation failure cannot corrupt the stream.
         val bytes = ByteArrayOutputStream()
-        DataOutputStream(bytes).use { stream ->
-            val uid = java.util.UUID.fromString("ccb535a2-1d24-4cc1-a709-8b47d2b2ac79")
-            stream.writeInt(30); stream.writeByte(0)
-            stream.writeLong(uid.mostSignificantBits); stream.writeLong(uid.leastSignificantBits)
-            stream.writeInt(2); stream.writeByte(0); stream.writeInt(if (enabled) 0 else 1)
-            stream.writeInt(8); stream.writeByte(0); stream.writeInt(0)
-        }
-        output.writeByte(41); output.writeInt(bytes.size()); bytes.writeTo(output); output.flush()
+        send(DataOutputStream(bytes), uid, command, arguments)
+        output.writeByte(41); bytes.writeTo(output); output.flush()
     }
+    fun screenLock(output: DataOutputStream, enabled: Boolean) =
+        feature(output, java.util.UUID.fromString("ccb535a2-1d24-4cc1-a709-8b47d2b2ac79"), if (enabled) 0 else 1)
     fun skipMessage(input: DataInputStream) {
         val size = input.readInt()
         if (size !in 0..MAX_MESSAGE) throw RemoteError("INVALID_MESSAGE")

@@ -5,7 +5,10 @@
   let state = {peers:[],networks:[],remote:[],vpnReady:false}, current = null, control = false, opening=false, menuPeer=null;
   let lastPoint={x:0,y:0}, inputQueue=Promise.resolve(), queued=0, moving=false, page='home';
   let config=null, gridDesired=false, gridToken=null, gridVersion=0, gridQueue=Promise.resolve(), activeLoad=null, cursor=0, lastIdentity=null;
+  let batchState={phase:"IDLE"}, batchAction=null, batchTargets=[], batchFile=null, batchPicking=false, batchStarting=false, progressOpen=false;
+  const urgent=new Map(), completedBatches=new Set();
   const errors = {
+    BATCH_BUSY:'Дождитесь завершения общего действия или отмените его.', INVALID_COMMAND:'Некорректная команда или список ПК.', INVALID_URL:'Введите адрес сайта с http:// или https://.', INVALID_FILE:'Не удалось прочитать выбранный файл.', FILE_TOO_LARGE:'Файл превышает 200 МБ.', FILE_REQUIRED:'Сначала выберите файл.', CANCELLED:'Действие отменено.',
     VPN_REQUIRED:'Сначала подключите VPN и дождитесь готовности интерфейса.', PEER_NOT_CONNECTED:'ПК недоступен через Radmin.',
     CREDENTIALS_REQUIRED:'Откройте «Настройки» → «Доступ к установленному Veyon» и сохраните ключ или учётную запись Windows.',
     AUTH_METHOD_UNAVAILABLE:'Проверьте способ входа в Veyon Configurator.', AUTH_FAILED:'Veyon не принял данные входа.',
@@ -36,15 +39,27 @@
     gridQueue=gridQueue.catch(()=>{}).then(()=>call('Remote.grid',{enabled})).then(token=>{if(version===gridVersion&&enabled)gridToken=token;}).catch(()=>{});
     return gridQueue;
   }
-  function updateGrid(force=false){const desired=page==='peers'&&!document.hidden&&!current&&!opening&&state.vpnReady&&!!credentialsReady();if(force||desired!==gridDesired)setGrid(desired);}
+  function updateGrid(force=false){const desired=page==='peers'&&!document.hidden&&!current&&!opening&&!batchPicking&&!(batchState.phase==='RUNNING'&&batchState.action==='file')&&state.vpnReady&&!!credentialsReady();if(force||desired!==gridDesired)setGrid(desired);}
   function layout(){
     if(page!=='peers')return;
     document.body.style.setProperty('--class-nav',Math.ceil(document.querySelector('nav').getBoundingClientRect().height)+'px');
-    const grid=$('peerList'),r=grid.getBoundingClientRect(),n=30;
-    const columns=Math.max(2,Math.min(10,Math.round(Math.sqrt(n*r.width/Math.max(1,r.height)/1.6))));
-    grid.style.gridTemplateColumns=`repeat(${columns},minmax(0,1fr))`;const rows=Math.ceil(n/columns),gap=parseFloat(getComputedStyle(grid).rowGap)||0;
-    const rowHeight=Math.max(30,(r.height-(rows-1)*gap)/rows);
-    grid.style.gridTemplateRows=`repeat(${rows},${rowHeight}px)`;grid.style.gridAutoRows=rowHeight+'px';
+    const grid=$('peerList'),r=grid.getBoundingClientRect(),peers=visiblePeers(),n=Math.max(1,Math.min(30,peers.length));
+    const gap=parseFloat(getComputedStyle(grid).columnGap)||0,label=parseFloat(getComputedStyle(document.querySelector('.computer-name')||grid).lineHeight)||12;
+    let counts=[n];
+    // Balance each row independently: the last row also spans the full width.
+    for(let rows=1;rows<=n;rows++){
+      const base=Math.floor(n/rows),extra=n%rows,list=Array.from({length:rows},(_,i)=>base+(i<extra?1:0));
+      const height=list.reduce((sum,count)=>sum+(r.width-gap*(count-1))/count*9/16+label+2,0)+gap*(rows-1);
+      if(height<=r.height+1)counts=list;
+    }
+    let index=0;
+    for(const count of counts)for(let j=0;j<count&&index<peers.length;j++,index++){
+      const card=cards.get(peers[index].id)?.card;if(card)card.style.width=`calc((100% - ${gap*(count-1)}px) / ${count})`;
+    }
+    const continuation=counts[0];
+    while(index<peers.length){const count=Math.min(continuation,peers.length-index);
+      for(let j=0;j<count;j++,index++){const card=cards.get(peers[index].id)?.card;if(card)card.style.width=`calc((100% - ${gap*(count-1)}px) / ${count})`;}}
+
   }
   function makeCard(p){
     const card=text('button','','computer-card');card.type='button';
@@ -56,7 +71,7 @@
   function render(s){
     state=s;
     const identity=s.vpnReady?s.ip:null;
-    if(identity!==lastIdentity){lastIdentity=identity;for(const c of cards.values())clearImage(c);updateGrid(true);}
+    if(identity!==lastIdentity){urgent.clear();lastIdentity=identity;for(const c of cards.values())clearImage(c);updateGrid(true);}
     const networks=s.networks||[],select=$('classNetwork'),opts=JSON.stringify(networks.map(n=>[n.id,n.name]));
     if(select.dataset.options!==opts){const value=select.value;select.replaceChildren(new Option('Все сети',''),...networks.map(n=>new Option(n.name,n.id)));if([...select.options].some(o=>o.value===value))select.value=value;select.dataset.options=opts;}
     const peers=s.peers||[],shown=new Set(visiblePeers().map(p=>p.id)),known=new Set(peers.map(p=>p.id));
@@ -69,7 +84,7 @@
       if(wantControl&&session.phase==='VIEWING'&&session.hasFrame){wantControl=false;act(async()=>{await call('Remote.control',{id:session.id,enabled:true});if(current?.id===session.id){control=true;current.control=true;updateViewer();}});}
       updateViewer();}}
     if(menuPeer)updateMenu();
-    updateGrid();layout();
+    renderBatch();updateGrid();layout();
   }
   function showMenu(rid){menuPeer=rid;updateMenu();$('computerMenu').hidden=false;$('computerCancel').focus();}
   function closeMenu(){const id=menuPeer;menuPeer=null;$('computerMenu').hidden=true;cards.get(id)?.card.focus({preventScroll:true});}
@@ -83,10 +98,12 @@
   }
   $('computerView').onclick=()=>act(()=>openPeer(menuPeer,false));
   $('computerControl').onclick=()=>act(()=>openPeer(menuPeer,true));
+  function refreshPeer(rid){const c=cards.get(rid);if(c){c.at=0;c.retry=0;urgent.set(rid,{next:Date.now()+500,left:3});}}
   for(const [id,enabled]of [['computerLock',true],['computerUnlock',false]])$(id).onclick=()=>act(async()=>{
-    const rid=menuPeer;closeMenu();opening=true;await setGrid(false);
-    try{await call('Remote.lock',{rid,enabled});api.toast(enabled?'Команда блокировки отправлена.':'Команда разблокировки отправлена.');cards.get(rid).at=0;}
-    finally{opening=false;updateGrid();}
+    const rid=menuPeer;closeMenu();
+    // Keep reading actual images during and after lock; a command is never a fake screenshot.
+    await call('Remote.lock',{rid,enabled});refreshPeer(rid);updateGrid(true);
+    api.toast(enabled?'Команда блокировки отправлена.':'Команда разблокировки отправлена.');
   });
   $('computerCancel').onclick=closeMenu;
   $('computerMenu').onclick=e=>{if(e.target===$('computerMenu'))closeMenu();};
@@ -164,9 +181,69 @@
   });}
   async function pump(){
     try{if(gridDesired&&gridToken!=null&&!activeLoad){const bounds=$('peerList').getBoundingClientRect(),peers=visiblePeers().filter(p=>{const c=cards.get(p.id),r=c?.card.getBoundingClientRect();return p.state==='CONNECTED'&&r&&r.bottom>bounds.top&&r.top<bounds.bottom;}),now=Date.now();
+      const priority=peers.find(p=>{const u=urgent.get(p.id);return u&&now>=u.next;});
+      if(priority){const u=urgent.get(priority.id);u.left--;u.next=now+1500;if(u.left<=0)urgent.delete(priority.id);await loadThumbnail(priority,gridToken);return;}
       for(let n=0;n<peers.length;n++){const p=peers[cursor++%peers.length],c=cards.get(p.id);if(c&&now>=c.retry&&(!c.at||now-c.at>=config.refreshMs)){await loadThumbnail(p,gridToken);break;}}
     }}finally{setTimeout(pump,60);}
   }
+  const actionLabels={shutdown:'Выключить',reboot:'Перезагрузить',lock:'Заблокировать',unlock:'Разблокировать',website:'Открыть сайт',file:'Передать файл'};
+  function renderBatch(){
+    const running=batchState.phase==='RUNNING',available=state.vpnReady&&visiblePeers().some(p=>p.state==='CONNECTED');
+    document.querySelectorAll('[data-batch]').forEach(b=>b.disabled=!available||running||batchStarting);
+    const progress=$('batchProgressButton');progress.hidden=!batchState.id;progress.textContent=(running?'Выполняется ':'Результат ')+(batchState.completed||0)+'/'+(batchState.total||0);
+    if(!progressOpen)return;
+    $('batchTitle').textContent=actionLabels[batchState.action]||'Общее действие';
+    $('batchStatus').textContent=(running?'Отправка: '+(batchState.current||'ожидание')+(batchState.bytes?' · '+Math.round(batchState.bytes/1024)+' КБ':''):
+      batchState.phase==='CANCELLED'?'Остановлено.':'Отправка завершена.')+` · Отправлено ${batchState.sent||0} из ${batchState.total||0}`;
+    $('batchSubmit').hidden=true;$('batchCancel').textContent=running?'Остановить':'Закрыть';
+    $('batchResults').replaceChildren(...(batchState.results||[]).map(r=>text('p',r.name+' · '+(r.status==='SENT'?'команда отправлена':errorText(r.error)),r.status==='SENT'?'':'failed')));
+  }
+  function showBatch(action){
+    batchTargets=visiblePeers().map(p=>({id:p.id,name:p.name}));
+    if(!batchTargets.length){api.toast('Нет доступных отображаемых ПК.');return;}
+    batchAction=action;progressOpen=false;batchFile=null;
+    $('batchTitle').textContent=actionLabels[action]+(action==='website'?' на ПК':'');
+    $('batchTargets').textContent=`Для ${batchTargets.length} отображаемых ПК: `+batchTargets.map(p=>p.name).join(', ');
+    $('batchUrlField').hidden=action!=='website';$('batchUrl').required=action==='website';$('batchUrl').value='';
+    $('batchFileField').hidden=action!=='file';$('batchFileInfo').textContent='Файл не выбран · до 200 МБ';
+    $('batchStatus').textContent=action==='file'?'Папка получения задаётся в Veyon на ПК. Существующие файлы не перезаписываются.':'';
+    $('batchResults').replaceChildren();$('batchSubmit').hidden=false;$('batchSubmit').disabled=action==='file';$('batchSubmit').textContent=actionLabels[action];
+    $('batchCancel').textContent='Отмена';$('batchDialog').hidden=false;
+    if(action==='website')$('batchUrl').focus();else $('batchCancel').focus();
+  }
+  document.querySelectorAll('[data-batch]').forEach(b=>b.onclick=()=>showBatch(b.dataset.batch));
+  $('chooseBatchFile').onclick=()=>act(async()=>{
+    batchPicking=true;await setGrid(false);$('chooseBatchFile').disabled=true;
+    try{const f=await call('Remote.chooseFile');if(!f.cancelled){batchFile=f;$('batchFileInfo').textContent=f.name+(f.size>=0?' · '+Math.round(f.size/1024)+' КБ':'');$('batchSubmit').disabled=false;}}
+    finally{batchPicking=false;$('chooseBatchFile').disabled=false;updateGrid(true);}
+  });
+  $('batchForm').onsubmit=e=>{e.preventDefault();if(batchStarting)return;act(async()=>{
+    batchStarting=true;$('batchSubmit').disabled=true;
+    try{
+      const args={action:batchAction,rids:batchTargets.map(p=>p.id)};
+      if(batchAction==='website')args.url=$('batchUrl').value.trim();
+      if(batchAction==='file')args.fileToken=batchFile?.token;
+      batchState=await call('Remote.startBatch',args);batchFile=null;progressOpen=true;
+      $('batchUrlField').hidden=$('batchFileField').hidden=true;renderBatch();updateGrid();
+      // Short commands run while the real thumbnail queue continues. File transfer gets the link.
+    }finally{batchStarting=false;if(!progressOpen)$('batchSubmit').disabled=false;renderBatch();}
+  });};
+  $('batchCancel').onclick=()=>act(async()=>{
+    if(progressOpen&&batchState.phase==='RUNNING'){await call('Remote.cancelBatch');return;}
+    if(!progressOpen)await call('Remote.discardFile');
+    batchAction=null;batchFile=null;progressOpen=false;$('batchDialog').hidden=true;
+  });
+  $('batchProgressButton').onclick=()=>{progressOpen=true;$('batchDialog').hidden=false;$('batchUrlField').hidden=$('batchFileField').hidden=true;$('batchTargets').textContent='';renderBatch();};
+  let pollingBatch=false;
+  setInterval(async()=>{if(pollingBatch||document.hidden||batchStarting||(page!=='peers'&&!progressOpen&&batchState.phase!=='RUNNING'))return;pollingBatch=true;
+    try{const status=await call('Remote.batchStatus');if(batchStarting)return;batchState=status;
+      if(batchState.id&&batchState.phase!=='RUNNING'&&!completedBatches.has(batchState.id)){
+        completedBatches.add(batchState.id);if(completedBatches.size>32)completedBatches.delete(completedBatches.values().next().value);
+        if(['lock','unlock','website'].includes(batchState.action))for(const r of batchState.results||[])if(r.status==='SENT')refreshPeer(r.rid);
+      }
+      renderBatch();updateGrid();
+    }catch{}finally{pollingBatch=false;}
+  },700);
   function pageChanged(next){page=next;document.body.classList.toggle('classroom-open',next==='peers');updateGrid();layout();}
   document.addEventListener('visibilitychange',()=>updateGrid(true));window.addEventListener('resize',layout);
   setInterval(()=>{if(!document.hidden&&current)image($('viewerImage'),validSession(current.id)||current,1600);},250);

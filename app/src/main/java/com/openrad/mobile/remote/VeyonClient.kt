@@ -181,6 +181,10 @@ class VeyonClient(
         if (closed || key !in 1..0x11ffff_ff) throw RemoteError("INVALID_INPUT")
         output.writeByte(4); output.writeBoolean(down); output.writeShort(0); output.writeInt(key); output.flush()
     }
+    fun feature(uid: java.util.UUID, command: Int = 0, arguments: Map<String, Any> = emptyMap()) = synchronized(outputLock) {
+        if (closed) throw RemoteError("SESSION_NOT_READY")
+        VeyonWire.feature(output, uid, command, arguments)
+    }
     fun screenLock(enabled: Boolean) = synchronized(outputLock) {
         if (closed) throw RemoteError("SESSION_NOT_READY")
         VeyonWire.screenLock(output, enabled)

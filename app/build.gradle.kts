@@ -14,8 +14,8 @@ android {
         applicationId = "ru.meshcheryakov.androidradminremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.4.1"
+        versionCode = 8
+        versionName = "0.4.2"
         manifestPlaceholders["appLabel"] = "@string/app_name"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

@@ -30,6 +30,20 @@ class RemoteManager(context: Context) {
     @Volatile private var gridEnabled = false
     private val gridEpoch = java.util.concurrent.atomic.AtomicLong()
     @Volatile private var commandSocket: Socket? = null
+    @Volatile private var commandInput: Pair<Socket, java.io.InputStream>? = null
+    data class TransferFile(val name: String, val size: Long, val open: () -> java.io.InputStream) {
+        override fun toString() = "TransferFile(REDACTED)"
+    }
+    @Volatile private var selectedFile: Pair<String, TransferFile>? = null
+    private class Batch(val id: String, val action: String, val epoch: Any, val activityEpoch: Long,
+                        val targets: List<Triple<Long, String, String>>) {
+        @Volatile var phase = "RUNNING"
+        @Volatile var cancelled = false
+        @Volatile var current = ""
+        @Volatile var bytes = 0L
+        val results = ArrayList<JSONObject>()
+    }
+    @Volatile private var batch: Batch? = null
     @Volatile private var disabled = false
     private val pixelLimit = minOf(12_000_000L,
         (app.getSystemService(android.app.ActivityManager::class.java)?.memoryClass ?: 128) * 1024L * 1024 / 24)
@@ -51,7 +65,7 @@ class RemoteManager(context: Context) {
     private fun ready(): Boolean = !disabled && EngineHost.engine?.isRunning == true &&
         EngineHost.state.value.phase == EngineState.Phase.ONLINE && EngineHost.interfaceStatus.value.ready
     private fun requireReady() { if (!ready()) throw RemoteError("VPN_REQUIRED") }
-    private fun noActive() { if (sessions.values.any { !it.closed }) throw RemoteError("CLOSE_SESSIONS_FIRST") }
+    private fun noActive() { if (batch?.phase == "RUNNING") throw RemoteError("BATCH_BUSY"); if (sessions.values.any { !it.closed }) throw RemoteError("CLOSE_SESSIONS_FIRST") }
     @Synchronized fun config(): JSONObject = JSONObject().put("mode", prefs.getString("mode", "key"))
         .put("username", prefs.getString("username", "")).put("keyName", prefs.getString("keyName", "teacher"))
         .put("port", prefs.getInt("port", 11100)).put("hasKey", !prefs.getString("privateKey", "").isNullOrEmpty())
@@ -88,6 +102,7 @@ class RemoteManager(context: Context) {
     }
     @Synchronized fun open(rid: Long): JSONObject {
         requireReady()
+        if (batch?.phase == "RUNNING") throw RemoteError("BATCH_BUSY")
         val engine = EngineHost.engine ?: throw RemoteError("VPN_REQUIRED")
         val peer = EngineHost.state.value.peers.firstOrNull { it.rid == rid && it.link == LinkState.CONNECTED }
             ?: throw RemoteError("PEER_NOT_CONNECTED")
@@ -204,16 +219,17 @@ class RemoteManager(context: Context) {
             thumbnailLock.unlock()
         }
     }
-    /** Lock/unlock are authenticated Veyon feature commands, with no framebuffer requested. */
-    fun lock(rid: Long, enabled: Boolean): Boolean {
+    /** Feature-only connections never disable the thumbnail scheduler or allocate a framebuffer. */
+    private fun command(rid: Long, timeoutSeconds: Long = 15, active: () -> Boolean = { true }, operation: (VeyonClient) -> Unit): Boolean {
         val socket = Socket()
         val auth: VeyonClient.Auth
         val engine: Any
         val ip: String
         val port: Int
         synchronized(this) {
-            requireReady(); stopThumbnail()
-            if (commandSocket != null) throw RemoteError("SESSION_NOT_READY")
+            requireReady()
+            if (!active()) throw RemoteError("CANCELLED")
+            if (commandSocket != null) throw RemoteError("BATCH_BUSY")
             val peer = EngineHost.state.value.peers.firstOrNull { it.rid == rid && it.link == LinkState.CONNECTED }
                 ?: throw RemoteError("PEER_NOT_CONNECTED")
             ip = Ip.format(peer.vip)
@@ -221,7 +237,7 @@ class RemoteManager(context: Context) {
             engine = EngineHost.engine ?: throw RemoteError("VPN_REQUIRED")
             auth = credentials(); port = prefs.getInt("port", 11100); commandSocket = socket
         }
-        val deadline = closer.schedule({ runCatching { socket.close() } }, 15, java.util.concurrent.TimeUnit.SECONDS)
+        val deadline = closer.schedule({ runCatching { socket.close() }; runCatching { commandInput?.takeIf { it.first === socket }?.second?.close() } }, timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
         var client: VeyonClient? = null
         try {
             socket.soTimeout = 10000; socket.tcpNoDelay = true
@@ -229,16 +245,87 @@ class RemoteManager(context: Context) {
             client = VeyonClient(socket)
             client.handshake(auth, startFrames = false)
             synchronized(this) {
-                if (!ready() || EngineHost.engine !== engine || commandSocket !== socket ||
+                if (!active() || !ready() || EngineHost.engine !== engine || commandSocket !== socket ||
                     EngineHost.state.value.peers.none { it.rid == rid && it.link == LinkState.CONNECTED && Ip.format(it.vip) == ip })
                     throw RemoteError("PEER_NOT_CONNECTED")
-                client.screenLock(enabled)
             }
-            return true // command sent; the plugin does not acknowledge applied lock state
+            operation(client)
+            return true
         } finally {
             auth.wipe(); deadline.cancel(false); client?.dispose(); runCatching { socket.close() }
             synchronized(this) { if (commandSocket === socket) commandSocket = null }
         }
+    }
+    fun lock(rid: Long, enabled: Boolean): Boolean {
+        synchronized(this) { if (batch?.phase == "RUNNING") throw RemoteError("BATCH_BUSY") }
+        return command(rid) { it.screenLock(enabled) }
+    }
+    @Synchronized fun prepareFile(file: TransferFile): JSONObject {
+        if (batch?.phase == "RUNNING") throw RemoteError("BATCH_BUSY")
+        if (file.size > VeyonCommands.MAX_FILE_BYTES) throw RemoteError("FILE_TOO_LARGE")
+        val safe = file.copy(name = VeyonCommands.fileName(file.name))
+        val token = UUID.randomUUID().toString(); selectedFile = token to safe
+        return JSONObject().put("token", token).put("name", safe.name).put("size", safe.size)
+    }
+    @Synchronized fun discardFile() { selectedFile = null }
+    @Synchronized fun startBatch(a: JSONObject): JSONObject {
+        requireReady(); noActive()
+        if (batch?.phase == "RUNNING" || commandSocket != null) throw RemoteError("BATCH_BUSY")
+        val action = a.getString("action")
+        if (action !in setOf("shutdown", "reboot", "lock", "unlock", "website", "file")) throw RemoteError("INVALID_COMMAND")
+        val url = if (action == "website") VeyonCommands.website(a.optString("url")) else ""
+        val file = if (action == "file") selectedFile?.takeIf { it.first == a.optString("fileToken") }?.second
+            ?: throw RemoteError("FILE_REQUIRED") else null
+        val rids = a.getJSONArray("rids")
+        if (rids.length() !in 1..128) throw RemoteError("INVALID_COMMAND")
+        val ids = (0 until rids.length()).map { rids.getString(it).toLongOrNull() ?: throw RemoteError("INVALID_COMMAND") }
+        if (ids.distinct().size != ids.size) throw RemoteError("INVALID_COMMAND")
+        val targets = ids.map { rid ->
+            val peer = EngineHost.state.value.peers.firstOrNull { it.rid == rid } ?: throw RemoteError("PEER_NOT_CONNECTED")
+            val ip = Ip.format(peer.vip)
+            if (!ip.startsWith("26.")) throw RemoteError("PEER_NOT_CONNECTED")
+            Triple(rid, ip, peer.name)
+        }
+        val job = Batch(UUID.randomUUID().toString(), action, EngineHost.engine ?: throw RemoteError("VPN_REQUIRED"), generation.get(), targets)
+        if (action == "file") selectedFile = null
+        batch = job
+        Thread({
+            try {
+                for ((rid, ip, name) in targets) {
+                    fun active() = !job.cancelled && ready() && EngineHost.engine === job.epoch && generation.get() == job.activityEpoch &&
+                        EngineHost.state.value.peers.any { it.rid == rid && it.link == LinkState.CONNECTED && Ip.format(it.vip) == ip }
+                    if (job.cancelled || !ready() || EngineHost.engine !== job.epoch || generation.get() != job.activityEpoch) {
+                        job.cancelled = true; break
+                    }
+                    job.current = name; job.bytes = 0
+                    var error: String? = null
+                    try {
+                        if (!active()) throw RemoteError("PEER_NOT_CONNECTED")
+                        command(rid, if (action == "file") 600 else 15, ::active) { client ->
+                            if (file != null) file.open().use { input ->
+                                commandInput = commandSocket?.let { it to input }
+                                try { VeyonCommands.file(file.name, input, client::feature, ::active) { job.bytes = it } }
+                                finally { commandInput = null }
+                            } else VeyonCommands.send(action, url, client::feature)
+                        }
+                    } catch (e: Exception) { error = if (e is RemoteError) e.code else "CONNECTION_FAILED" }
+                    synchronized(this) { job.results.add(JSONObject().put("rid", rid.toString()).put("name", name)
+                        .put("status", if (error == null) "SENT" else "ERROR").put("error", error ?: JSONObject.NULL)) }
+                    if (job.cancelled) break
+                }
+            } finally { job.current = ""; job.phase = if (job.cancelled) "CANCELLED" else "FINISHED" }
+        }, "veyon-batch").apply { isDaemon = true; start() }
+        return batchStatus()
+    }
+    @Synchronized fun batchStatus(): JSONObject {
+        val b = batch ?: return JSONObject().put("phase", "IDLE")
+        return JSONObject().put("id", b.id).put("action", b.action).put("phase", b.phase).put("total", b.targets.size)
+            .put("completed", b.results.size).put("sent", b.results.count { it.optString("status") == "SENT" })
+            .put("current", b.current).put("bytes", b.bytes).put("results", JSONArray(b.results.toList()))
+    }
+    @Synchronized fun cancelBatch(): Boolean {
+        batch?.takeIf { it.phase == "RUNNING" }?.let { it.cancelled = true; runCatching { commandSocket?.close() }; runCatching { commandInput?.second?.close() } }
+        return true
     }
     private fun valid(s: Session) = !s.closed && ready() && EngineHost.engine === s.epoch && s.activityEpoch == generation.get() &&
         EngineHost.state.value.peers.any { it.rid == s.rid && it.link == LinkState.CONNECTED && Ip.format(it.vip) == s.ip }
@@ -337,10 +424,12 @@ class RemoteManager(context: Context) {
         }
     }
     @Synchronized fun close(id: String) { sessions[id]?.let { finish(it) } }
-    @Synchronized fun closeAll() { stopThumbnail(); runCatching { commandSocket?.close() }; sessions.values.toList().forEach { finish(it) } }
+    @Synchronized fun closeAll() { cancelBatch(); stopThumbnail(); runCatching { commandSocket?.close() }; sessions.values.toList().forEach { finish(it) } }
     fun pause() {
         disabled = true
-        stopThumbnail(); runCatching { commandSocket?.close() }
+        batch?.cancelled = true
+        selectedFile = null
+        stopThumbnail(); runCatching { commandSocket?.close() }; runCatching { commandInput?.second?.close() }
         val epoch = generation.incrementAndGet()
         // Never block Android's main lifecycle thread on a desktop socket write.
         Thread({
