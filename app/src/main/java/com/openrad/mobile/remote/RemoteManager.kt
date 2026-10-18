@@ -73,6 +73,21 @@ class RemoteManager(context: Context) {
         .put("refreshMs", prefs.getInt("refreshMs", 2000)).put("thumbnailWidth", prefs.getInt("thumbnailWidth", 240))
         .put("jpegQuality", prefs.getInt("jpegQuality", 45)).put("network", prefs.getString("network", ""))
         .put("onlineOnly", prefs.getBoolean("onlineOnly", true))
+        .put("displayAll", prefs.getBoolean("displayAll", true))
+        .put("displayIds", JSONArray(prefs.getString("displayIds", "[]")))
+    /** Display preference only: does not modify credentials or a captured batch target list. */
+    @Synchronized fun saveDisplay(a: JSONObject): JSONObject {
+        val all = a.getBoolean("displayAll")
+        val input = a.getJSONArray("displayIds")
+        if (input.length() > 2048) throw RemoteError("INVALID_SETTINGS")
+        val ids = (0 until input.length()).map { i ->
+            input.getString(i).toLongOrNull()?.takeIf { it > 0 }?.toString() ?: throw RemoteError("INVALID_SETTINGS")
+        }.distinct()
+        val array = JSONArray(if (all) emptyList<String>() else ids)
+        if (!prefs.edit().putBoolean("displayAll", all).putString("displayIds", array.toString()).commit())
+            throw RemoteError("SETTINGS_SAVE_FAILED")
+        return JSONObject().put("displayAll", all).put("displayIds", array)
+    }
     @Synchronized fun save(a: JSONObject): JSONObject {
         noActive(); stopThumbnail()
         val mode = a.optString("mode", "key"); val username = a.optString("username", "")

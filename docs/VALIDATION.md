@@ -62,3 +62,10 @@ Not executed: native Android JNI loading, on-device protect(fd)/DNS callbacks, d
 - 163 JVM tests: 162 passed, 1 upstream skipped, zero failures/errors. Five new command regressions: independent Qt_5_5 power/website/file wire fixtures, binary streaming order, cancellation without finish, a bounded unknown-length stream, URL/name validation.
 - Synthetic browser checks: 30 frames fit with exact 16:9 previews; 5-PC geometry grows; full-width row layout; all six batch actions target exactly the five filtered PCs, never hidden devices; per-peer failure and cancellation; single-PC lock keeps fetching actual image resources despite the ordinary refresh age. Viewer/control still pause all other snapshots. 1280/1536/390/320px, no runtime errors or horizontal overflow. `v042-*-synthetic.png` fixtures are synthetic, not real Windows action evidence.
 - File selection uses Android SAF and a RAM-only URI opener, 64KiB binary chunks and a 200MiB cap; no Base64 payload in the WebView and no plaintext temporary file. Veyon provides no delivery/application acknowledgement. Status is SENT, not RECEIVED/APPLIED. No real PC is powered off, rebooted, blocked or sent data by tests.
+
+
+## 1.0.0 — stable release and saved display selection
+
+- User accepted the working 0.4.2 functionality and requested a stable release. Publish `v1.0.0` with `prerelease: false`, `make_latest: true`, permanent certificate, package unchanged, versionCode 9.
+- Checkbox dropdown: select two PCs from thirty, search, select none/all, retain selection across document reload through the native preference boundary, exclude hidden PCs from thumbnails and a website batch. Existing 30-PC sequencing, 16:9 rows, 5-PC resize, per-target failure/cancellation, lock refresh and view/control pause checks pass at 1280/1536/390/320px without JS errors or overflow. Screenshots `v100-*-synthetic.png` are synthetic fixtures.
+- `Remote.saveDisplay` stores only a bounded list of numeric RIDs and all/custom mode in encrypted preferences. It does not update credentials or the captured recipient list of a running batch. Existing JVM/wire tests are unchanged.

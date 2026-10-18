@@ -82,6 +82,7 @@ class WebBridge(
 
     private suspend fun call(method: String, a: JSONObject): Any? = when (method) {
         "Remote.getConfig" -> remote.config()
+        "Remote.saveDisplay" -> remote.saveDisplay(a)
         "Remote.saveConfig" -> remote.save(a)
         "Remote.importKey" -> importFile()?.let { remote.importKey(it) } ?: JSONObject().put("cancelled", true)
         "Remote.chooseFile" -> transferFile()?.let { remote.prepareFile(it) } ?: JSONObject().put("cancelled", true)

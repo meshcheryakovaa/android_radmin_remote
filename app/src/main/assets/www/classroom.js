@@ -6,6 +6,8 @@
   let lastPoint={x:0,y:0}, inputQueue=Promise.resolve(), queued=0, moving=false, page='home';
   let config=null, gridDesired=false, gridToken=null, gridVersion=0, gridQueue=Promise.resolve(), activeLoad=null, cursor=0, lastIdentity=null;
   let batchState={phase:"IDLE"}, batchAction=null, batchTargets=[], batchFile=null, batchPicking=false, batchStarting=false, progressOpen=false;
+  let displayAll=true, displayIds=new Set(), selectionLoaded=false, selectionVersion=0, selectionQueue=Promise.resolve();
+  const pickerRows=new Map();
   const urgent=new Map(), completedBatches=new Set();
   const errors = {
     BATCH_BUSY:'Дождитесь завершения общего действия или отмените его.', INVALID_COMMAND:'Некорректная команда или список ПК.', INVALID_URL:'Введите адрес сайта с http:// или https://.', INVALID_FILE:'Не удалось прочитать выбранный файл.', FILE_TOO_LARGE:'Файл превышает 200 МБ.', FILE_REQUIRED:'Сначала выберите файл.', CANCELLED:'Действие отменено.',
@@ -30,8 +32,38 @@
   function text(tag,value,cls){const n=document.createElement(tag);n.textContent=value;if(cls)n.className=cls;return n;}
   function sessions(){return state.remote||[];}
   function validSession(id){return sessions().find(s=>s.id===id);}
-  function allowed(p){return (!config?.onlineOnly||p.state==='CONNECTED')&&(!config?.network||p.networkIds?.includes(config.network));}
+  function allowed(p){return (displayAll||displayIds.has(p.id))&&(!config?.onlineOnly||p.state==='CONNECTED')&&(!config?.network||p.networkIds?.includes(config.network));}
   function visiblePeers(){return (state.peers||[]).filter(allowed);}
+  function pickerPeers(){return (state.peers||[]).filter(p=>!config?.network||p.networkIds?.includes(config.network));}
+  function renderPicker(){
+    const busy=batchStarting||batchState.phase==='RUNNING',query=$('computerPickerSearch').value.trim().toLocaleLowerCase();
+    const peers=pickerPeers(),known=new Set(peers.map(p=>p.id));
+    $('computerPickerSummary').textContent='ПК · '+visiblePeers().length+' ▾';
+    for(const[id,row]of pickerRows)if(!known.has(id)){row.label.remove();pickerRows.delete(id);}
+    for(const p of peers){let row=pickerRows.get(p.id);if(!row){const label=text('label','','picker-option'),input=document.createElement('input'),name=text('span',p.name);
+      input.type='checkbox';input.setAttribute('aria-label',p.name);input.onchange=()=>{
+        const ids=displayAll?new Set((state.peers||[]).map(p=>p.id)):new Set(displayIds);
+        if(input.checked)ids.add(p.id);else ids.delete(p.id);changeDisplay(false,ids);
+      };label.append(input,name);$('computerPickerList').append(label);row={label,input,name};pickerRows.set(p.id,row);}
+      row.label.hidden=!!query&&!(p.name+' '+p.ip).toLocaleLowerCase().includes(query);row.input.checked=displayAll||displayIds.has(p.id);row.input.disabled=busy;
+      row.name.textContent=p.name;row.input.setAttribute('aria-label',p.name);row.label.title=p.name+' · '+p.ip;row.label.classList.toggle('offline',p.state!=='CONNECTED');
+    }
+    $('computerPickerAll').disabled=$('computerPickerNone').disabled=busy;
+  }
+  function changeDisplay(all,ids){
+    if(batchStarting||batchState.phase==='RUNNING'){renderPicker();return;}
+    const previous={all:displayAll,ids:displayIds},version=++selectionVersion;
+    displayAll=all;displayIds=ids;updateGrid(true);render(state);
+    const args={displayAll:all,displayIds:all?[]:[...ids]};
+    selectionQueue=selectionQueue.catch(()=>{}).then(()=>call('Remote.saveDisplay',args)).catch(e=>{
+      if(version===selectionVersion){displayAll=previous.all;displayIds=previous.ids;render(state);updateGrid(true);}api.toast(e.message);
+    });
+  }
+  $('computerPickerAll').onclick=()=>changeDisplay(true,new Set());
+  $('computerPickerNone').onclick=()=>changeDisplay(false,new Set());
+  $('computerPickerSearch').oninput=renderPicker;
+  document.addEventListener('pointerdown',e=>{if(!$('computerPicker').contains(e.target))$('computerPicker').open=false;});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('computerPicker').open){e.preventDefault();$('computerPicker').open=false;$('computerPickerSummary').focus();}});
   function credentialsReady(){return config&&(config.mode==='key'?config.hasKey:config.hasPassword&&config.username);}
   function setGrid(enabled){
     gridDesired=enabled;gridToken=null;const version=++gridVersion;
@@ -152,7 +184,8 @@
   window.addEventListener('blur',()=>{hardwareKeys.clear();if(current&&control){control=false;const id=current.id;inputQueue=inputQueue.catch(()=>{}).then(()=>call('Remote.control',{id,enabled:false})).catch(()=>{});updateViewer();}});
   $('remoteTextForm').onsubmit=e=>{e.preventDefault();const value=$('remoteText').value;$('remoteText').value='';act(async()=>{for(const char of value){if(!control)break;const c=char.codePointAt(0);await combo([c<=255?c:0x01000000+c]);}});};
 
-  function settings(c){config=c;const f=$('remoteForm').elements;
+  function settings(c){config=c;
+    if(!selectionLoaded){displayAll=c.displayAll!==false;displayIds=new Set(c.displayIds||[]);selectionLoaded=true;}const f=$('remoteForm').elements;
     for(const k of ['mode','port','username','keyName','refreshMs','thumbnailWidth','jpegQuality','network'])if(c[k]!=null)f[k].value=c[k];
     f.onlineOnly.checked=c.onlineOnly!==false;f.password.value='';
     $('remoteCredentialsState').textContent=`Ключ: ${c.hasKey?'сохранён':'не импортирован'} · Пароль: ${c.hasPassword?'сохранён':'не задан'}`;
@@ -188,6 +221,7 @@
   }
   const actionLabels={shutdown:'Выключить',reboot:'Перезагрузить',lock:'Заблокировать',unlock:'Разблокировать',website:'Открыть сайт',file:'Передать файл'};
   function renderBatch(){
+    renderPicker();
     const running=batchState.phase==='RUNNING',available=state.vpnReady&&visiblePeers().some(p=>p.state==='CONNECTED');
     document.querySelectorAll('[data-batch]').forEach(b=>b.disabled=!available||running||batchStarting);
     const progress=$('batchProgressButton');progress.hidden=!batchState.id;progress.textContent=(running?'Выполняется ':'Результат ')+(batchState.completed||0)+'/'+(batchState.total||0);
@@ -244,7 +278,7 @@
       renderBatch();updateGrid();
     }catch{}finally{pollingBatch=false;}
   },700);
-  function pageChanged(next){page=next;document.body.classList.toggle('classroom-open',next==='peers');updateGrid();layout();}
+  function pageChanged(next){$('computerPicker').open=false;page=next;document.body.classList.toggle('classroom-open',next==='peers');updateGrid();layout();}
   document.addEventListener('visibilitychange',()=>updateGrid(true));window.addEventListener('resize',layout);
   setInterval(()=>{if(!document.hidden&&current)image($('viewerImage'),validSession(current.id)||current,1600);},250);
   window.Classroom={render,pageChanged};
