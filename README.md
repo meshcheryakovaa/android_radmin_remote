@@ -1,20 +1,18 @@
 # Android Radmin Remote
 
-**Версия 0.2.1:** единый Android APK с локальным HTML-интерфейсом, OpenRad engine и встроенным Xray для **VLESS + Reality по TCP и gRPC**.
+**Версия 0.3.0:** единый Android APK с локальным HTML-интерфейсом, OpenRad engine и встроенным Xray для **VLESS + Reality по TCP и gRPC**.
 
 Android 8.0+ (API 26). DIRECT, внешний SOCKS5 или импорт серверов из Xray/Happ JSON. Единственный VpnService создаёт TUN с маршрутом `26.0.0.0/8`, MTU 1500. Остальной интернет телефона через этот TUN не направляется.
 
-## Скачать
+## Основное приложение 0.3.0
 
-[Релиз 0.2.1 test](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/v0.2.1-test) · [app-test-0.2.1.apk](https://github.com/meshcheryakovaa/android_radmin_remote/releases/download/v0.2.1-test/app-test-0.2.1.apk)
+Основной APK: `android-radmin-remote-0.3.0.apk`, название **Radmin Remote**, package `ru.meshcheryakov.androidradminremote`, release-сборка без отладки. Проверенные TCP/gRPC, импорт Happ JSON, relay и исправление повторного запуска Xray включены. Протокол OpenRad и ограничения маршрута 26.0.0.0/8 сохранены. Пользователь подтвердил регистрацию, вход в сеть, четыре relay-соединения и RTT до ПК через gRPC-профиль на тестовой 0.2.1; это не гарантирует доступность любого сервера на любом операторе.
 
-Тестовые APK включают библиотеки для arm64-v8a, armeabi-v7a, x86_64 и x86. Production signing настраивается отдельно от исходников.
+Это первая основная установка: у неё отдельные identity, IP и настройки. Старый debug и «OpenRad Тест 0.2.1» можно оставить установленными. Импортируйте JSON и присоединитесь к Radmin-сети в основном приложении; запускайте один VPN. Последующие основные версии требуют тот же package, ключ подписи и увеличенный versionCode — тогда обычное обновление сохраняет данные.
 
-## Установка рядом с прежней версией
+Для основного выпуска подготовлен постоянный сертификат; SHA-256 в `release-signing-certificate.sha256`. Сам ключ не хранится в git. GitHub Actions публикует [релиз v0.3.0](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/v0.3.0) только после настройки секрета. Если секрета нет, проверки и debug-артефакт собираются, но основной APK не публикуется. Инструкция: [подпись и публикация](docs/RELEASE-SIGNING.ru.md).
 
-У опубликованных debug APK 0.2.0 и 0.2.1 разные сертификаты подписи. Обновление поверх прежней установки невозможно. Для проверки используйте **app-test-0.2.1.apk**, название «OpenRad Тест 0.2.1», package `ru.meshcheryakov.androidradminremote.test021`: он устанавливается рядом, старый клиент удалять не нужно. Новая установка имеет отдельную identity, IP и настройки: импортируйте JSON и войдите в Radmin-сеть заново. Перед запуском тестового VPN отключите старый клиент и Happ.
-
-Обычный app-debug.apk также доступен, но не предназначен для обновления старого APK с другим сертификатом. Ключи подписи в репозитории не хранятся.
+Исторический [тестовый релиз 0.2.1](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/v0.2.1-test) остаётся доступен.
 
 ## Первый запуск VLESS / Reality
 
@@ -54,9 +52,9 @@ python3 scripts/setup-xray.py  # официальный AAR, SHA-256 прове�
 ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-build-cache
 ```
 
-Загрузка AAR также автоматически выполняется Gradle task `setupXray`. AAR не хранится в git; URL, версия и SHA-256 зафиксированы в скрипте. Android Studio открывает корень проекта; Windows использует Python 3, curl и `gradlew.bat`. Результат: `app/build/outputs/apk/debug/app-debug.apk`. Для параллельной тестовой установки добавьте `-Popenrad.parallelInstall=true` к assembleDebug; в CI этот APK сохраняется как app-test-0.2.1.apk.
+Загрузка AAR также автоматически выполняется Gradle task `setupXray`. AAR не хранится в git; URL, версия и SHA-256 зафиксированы в скрипте. Android Studio открывает корень проекта; Windows использует Python 3, curl и `gradlew.bat`. Результат: `app/build/outputs/apk/debug/app-debug.apk`. Для основной release-сборки настройте OPENRAD_SIGNING_PROPERTIES и выполните :app:assembleRelease.
 
-GitHub Actions собирает APK, запускает JVM-тесты и native smoke test на loopback, публикует versioned debug release и artifacts. DEX build cache отключён: при смене native classpath в AGP 8.5 локально наблюдались устаревшие архивы R-классов. Incremental/up-to-date проверки остаются доступны.
+GitHub Actions собирает APK, запускает JVM-тесты и native smoke test на loopback, публикует подписанный основной выпуск при настроенном секрете и debug-артефакт для разработки. DEX build cache отключён: при смене native classpath в AGP 8.5 локально наблюдались устаревшие архивы R-классов. Incremental/up-to-date проверки остаются доступны.
 
 ## Проверки и ограничения
 

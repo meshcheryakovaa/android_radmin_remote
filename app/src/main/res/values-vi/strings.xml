@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OpenRad</string>
-    <string name="app_name_test">OpenRad Thử nghiệm 0.2.1</string>
+    <string name="app_name">Radmin Remote</string>
     <string name="nav_networks">Mạng của tôi</string>
     <string name="nav_discover">Khám phá</string>
     <string name="nav_autojoin">Tự tham gia</string>

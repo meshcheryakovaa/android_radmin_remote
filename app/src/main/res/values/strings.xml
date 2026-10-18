@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OpenRad</string>
-    <string name="app_name_test">OpenRad Test 0.2.1</string>
+    <string name="app_name">Radmin Remote</string>
     <string name="nav_networks">My networks</string>
     <string name="nav_discover">Discover</string>
     <string name="nav_autojoin">Auto join</string>

@@ -37,3 +37,9 @@ app/libs/*.aar
 
 __pycache__/
 *.pyc
+
+# Private release signing backup / Actions secret (owner only)
+ANDROID_RELEASE_SIGNING_B64.txt
+signing.json
+signing.properties
+radmin-release-signing-backup.zip

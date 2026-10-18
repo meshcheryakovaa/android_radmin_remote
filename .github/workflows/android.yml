@@ -31,17 +31,34 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-build-cache --stacktrace
       - name: Native Xray smoke test (loopback only)
         run: python3 scripts/test-xray-native.py --download
-      - name: Prepare APKs including parallel install test build
-        run: |
-          mkdir -p build/release-apks
-          cp app/build/outputs/apk/debug/app-debug.apk build/release-apks/app-debug.apk
-          ./gradlew :app:assembleDebug -Popenrad.parallelInstall=true --no-build-cache --stacktrace
-          cp app/build/outputs/apk/debug/app-debug.apk build/release-apks/app-test-0.2.1.apk
-      - name: Upload APK
+      - name: Upload developer debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-radmin-remote-debug
-          path: build/release-apks/*.apk
+          name: developer-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Prepare private release signing
+        id: signing
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          ANDROID_RELEASE_SIGNING_B64: ${{ secrets.ANDROID_RELEASE_SIGNING_B64 }}
+        run: python3 scripts/prepare-release-signing.py
+      - name: Build signed main APK
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          OPENRAD_SIGNING_PROPERTIES: ${{ steps.signing.outputs.propertiesFile }}
+        run: |
+          ./gradlew :app:assembleRelease --no-build-cache --stacktrace
+          mkdir -p build/release-apks
+          cp app/build/outputs/apk/release/app-release.apk build/release-apks/android-radmin-remote-0.3.0.apk
+          signer_digest=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs build/release-apks/android-radmin-remote-0.3.0.apk | awk '/certificate SHA-256 digest:/ {print $NF; exit}')
+          test "$signer_digest" = "$(cat release-signing-certificate.sha256)"
+      - name: Upload signed main APK
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-radmin-remote-0.3.0
+          path: build/release-apks/android-radmin-remote-0.3.0.apk
           if-no-files-found: error
       - name: Upload test reports
         if: always()
@@ -50,18 +67,32 @@ jobs:
           name: test-reports
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
-      - name: Publish downloadable debug APK
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Publish main release
+        if: steps.signing.outputs.ready == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.1-test
+          tag_name: v0.3.0
           target_commitish: ${{ github.sha }}
-          name: Android Radmin Remote 0.2.1 · parallel test
-          prerelease: true
-          files: build/release-apks/*.apk
+          name: Android Radmin Remote 0.3.0
+          prerelease: false
+          files: build/release-apks/android-radmin-remote-0.3.0.apk
           fail_on_unmatched_files: true
           body: |
-            Embedded libXray 26.10.10: import Xray/Happ JSON and select a VLESS Reality TCP or gRPC profile.
-            Single APK: HTML UI, OpenRad engine, Direct / SOCKS5 / embedded Xray TCP relay.
-            Adds gRPC profile import and cleans up the previous Xray session before retrying. AUTO is not enabled. Mobile allowlist connectivity requires manual validation.
-            Install app-test-0.2.1.apk alongside the old app; it has separate identity/settings and requires importing profiles and joining networks again. Keep the old client. Android 8.0+. See README.
+            Main signed application: Direct / SOCKS5 / embedded VLESS Reality TCP and gRPC.
+            Android package: ru.meshcheryakov.androidradminremote. Android 8.0+.
+            Uses the permanent release certificate; updates must keep this same key and package.
+            First main installation has separate identity/settings from the old debug/test apps. Keep those installed until configured.
+            The gRPC relay path and PC RTT were validated by the user on the test build. AUTO and remote desktop viewer are not included.
+      - name: Remove temporary signing files
+        if: always() && steps.signing.outputs.ready == 'true'
+        env:
+          SIGNING_PROPERTIES: ${{ steps.signing.outputs.propertiesFile }}
+        run: |
+          python3 - <<'PY_CLEAN'
+          import os
+          from pathlib import Path
+          folder = Path(os.environ['SIGNING_PROPERTIES']).parent
+          for name in ('release.jks', 'signing.properties'):
+              (folder / name).unlink(missing_ok=True)
+          folder.rmdir()
+          PY_CLEAN

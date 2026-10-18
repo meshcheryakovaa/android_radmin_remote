@@ -14,8 +14,8 @@ android {
         applicationId = "ru.meshcheryakov.androidradminremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.2.1"
+        versionCode = 5
+        versionName = "0.3.0"
         manifestPlaceholders["appLabel"] = "@string/app_name"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -54,9 +54,7 @@ android {
             )
         }
         debug {
-            val parallelInstall = providers.gradleProperty("openrad.parallelInstall").orNull == "true"
-            applicationIdSuffix = if (parallelInstall) ".test021" else ".debug"
-            if (parallelInstall) manifestPlaceholders["appLabel"] = "@string/app_name_test"
+            applicationIdSuffix = ".debug"
         }
     }
     compileOptions {
