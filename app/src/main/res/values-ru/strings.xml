@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenRad</string>
+    <string name="app_name_test">OpenRad Тест 0.2.1</string>
     <string name="nav_networks">Мои сети</string>
     <string name="nav_discover">Обзор сетей</string>
     <string name="nav_autojoin">Автовход</string>

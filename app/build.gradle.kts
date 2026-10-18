@@ -16,6 +16,7 @@ android {
         targetSdk = 34
         versionCode = 4
         versionName = "0.2.1"
+        manifestPlaceholders["appLabel"] = "@string/app_name"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -53,7 +54,9 @@ android {
             )
         }
         debug {
-            applicationIdSuffix = ".debug"
+            val parallelInstall = providers.gradleProperty("openrad.parallelInstall").orNull == "true"
+            applicationIdSuffix = if (parallelInstall) ".test021" else ".debug"
+            if (parallelInstall) manifestPlaceholders["appLabel"] = "@string/app_name_test"
         }
     }
     compileOptions {

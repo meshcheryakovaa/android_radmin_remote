@@ -6,9 +6,15 @@ Android 8.0+ (API 26). DIRECT, внешний SOCKS5 или импорт сер�
 
 ## Скачать
 
-[Релиз 0.2.1 debug](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/v0.2.1-debug) · [app-debug.apk](https://github.com/meshcheryakovaa/android_radmin_remote/releases/download/v0.2.1-debug/app-debug.apk)
+[Релиз 0.2.1 test](https://github.com/meshcheryakovaa/android_radmin_remote/releases/tag/v0.2.1-test) · [app-test-0.2.1.apk](https://github.com/meshcheryakovaa/android_radmin_remote/releases/download/v0.2.1-test/app-test-0.2.1.apk)
 
-Это тестовая APK со встроенными библиотеками для arm64-v8a, armeabi-v7a, x86_64 и x86. При несовместимой подписи предыдущей debug-сборки Android потребует удалить старую установку; это удалит локальную identity и настройки. Production signing настраивается отдельно от исходников.
+Тестовые APK включают библиотеки для arm64-v8a, armeabi-v7a, x86_64 и x86. Production signing настраивается отдельно от исходников.
+
+## Установка рядом с прежней версией
+
+У опубликованных debug APK 0.2.0 и 0.2.1 разные сертификаты подписи. Обновление поверх прежней установки невозможно. Для проверки используйте **app-test-0.2.1.apk**, название «OpenRad Тест 0.2.1», package `ru.meshcheryakov.androidradminremote.test021`: он устанавливается рядом, старый клиент удалять не нужно. Новая установка имеет отдельную identity, IP и настройки: импортируйте JSON и войдите в Radmin-сеть заново. Перед запуском тестового VPN отключите старый клиент и Happ.
+
+Обычный app-debug.apk также доступен, но не предназначен для обновления старого APK с другим сертификатом. Ключи подписи в репозитории не хранятся.
 
 ## Первый запуск VLESS / Reality
 
@@ -48,7 +54,7 @@ python3 scripts/setup-xray.py  # официальный AAR, SHA-256 прове�
 ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-build-cache
 ```
 
-Загрузка AAR также автоматически выполняется Gradle task `setupXray`. AAR не хранится в git; URL, версия и SHA-256 зафиксированы в скрипте. Android Studio открывает корень проекта; Windows использует Python 3, curl и `gradlew.bat`. Результат: `app/build/outputs/apk/debug/app-debug.apk`.
+Загрузка AAR также автоматически выполняется Gradle task `setupXray`. AAR не хранится в git; URL, версия и SHA-256 зафиксированы в скрипте. Android Studio открывает корень проекта; Windows использует Python 3, curl и `gradlew.bat`. Результат: `app/build/outputs/apk/debug/app-debug.apk`. Для параллельной тестовой установки добавьте `-Popenrad.parallelInstall=true` к assembleDebug; в CI этот APK сохраняется как app-test-0.2.1.apk.
 
 GitHub Actions собирает APK, запускает JVM-тесты и native smoke test на loopback, публикует versioned debug release и artifacts. DEX build cache отключён: при смене native classpath в AGP 8.5 локально наблюдались устаревшие архивы R-классов. Incremental/up-to-date проверки остаются доступны.
 

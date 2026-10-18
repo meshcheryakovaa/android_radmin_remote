@@ -31,11 +31,17 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-build-cache --stacktrace
       - name: Native Xray smoke test (loopback only)
         run: python3 scripts/test-xray-native.py --download
+      - name: Prepare APKs including parallel install test build
+        run: |
+          mkdir -p build/release-apks
+          cp app/build/outputs/apk/debug/app-debug.apk build/release-apks/app-debug.apk
+          ./gradlew :app:assembleDebug -Popenrad.parallelInstall=true --no-build-cache --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk build/release-apks/app-test-0.2.1.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: android-radmin-remote-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: build/release-apks/*.apk
           if-no-files-found: error
       - name: Upload test reports
         if: always()
@@ -48,14 +54,14 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.1-debug
+          tag_name: v0.2.1-test
           target_commitish: ${{ github.sha }}
-          name: Android Radmin Remote 0.2.1 · debug
+          name: Android Radmin Remote 0.2.1 · parallel test
           prerelease: true
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: build/release-apks/*.apk
           fail_on_unmatched_files: true
           body: |
             Embedded libXray 26.10.10: import Xray/Happ JSON and select a VLESS Reality TCP or gRPC profile.
             Single APK: HTML UI, OpenRad engine, Direct / SOCKS5 / embedded Xray TCP relay.
             Adds gRPC profile import and cleans up the previous Xray session before retrying. AUTO is not enabled. Mobile allowlist connectivity requires manual validation.
-            Install app-debug.apk on Android 8.0+. See README for configuration.
+            Install app-test-0.2.1.apk alongside the old app; it has separate identity/settings and requires importing profiles and joining networks again. Keep the old client. Android 8.0+. See README.
