@@ -43,7 +43,10 @@ object XrayRuntime {
 
     @Synchronized fun start(context: android.content.Context, profile: XrayProfile, protect: (Int) -> Boolean, dns: String, timeoutMs: Int,
                             sockets: SocketProtector): OutboundTransport {
-        check(phase != "READY" && phase != "STARTING") { "Xray already active" }
+        if (phase == "READY" || phase == "STARTING") {
+            lastError = "XRAY_ALREADY_ACTIVE:$stage"
+            throw IllegalStateException("XRAY_ALREADY_ACTIVE")
+        }
         phase = "STARTING"
         lastError = null
         fdProtector = protect

@@ -54,43 +54,44 @@ def main():
         assert response['success'], response.get('error')
         return response.get('data') or {}
 
-    fixture = ROOT / 'app/build/test-artifacts/xray-profile.json'
-    if not fixture.exists():
-        fixture = ROOT / 'build/test-artifacts/xray-profile.json'
-    config = json.loads(fixture.read_text())
-    assert config['outbounds'][0]['settings']['vnext'][0]['address'] == '127.0.0.1', 'synthetic fixture required'
-    version = invoke('xrayVersion')['version']
-    for _ in range(2):
-        with socket.socket() as reserve:
-            reserve.bind(('127.0.0.1', 0))
-            port = reserve.getsockname()[1]
-        config['inbounds'][0]['port'] = port
-        invoke('testXray', {'xrayJson': json.dumps(config)})
-        try:
-            invoke('runXray', {'xrayJson': json.dumps(config)})
-            assert invoke('getXrayState')['running']
-            with socket.create_connection(('127.0.0.1', port), 2) as client:
-                client.settimeout(2)
-                client.sendall(bytes([5, 1, 2]))
-                assert client.recv(2) == bytes([5, 2])
-                user, password = b'test-user', b'synthetic-secret'
-                client.sendall(bytes([1, len(user)]) + user + bytes([len(password)]) + password)
-                assert client.recv(2) == bytes([1, 0]), 'SOCKS authentication rejected'
-            with socket.create_connection(('127.0.0.1', port), 2) as client:
-                client.settimeout(2)
-                client.sendall(bytes([5, 1, 0]))
-                assert client.recv(2) == bytes([5, 255]), 'unauthenticated SOCKS unexpectedly accepted'
-        finally:
-            invoke('stopXray')
-        assert not invoke('getXrayState')['running']
-        try:
-            client = socket.create_connection(('127.0.0.1', port), .5)
-        except OSError:
-            pass
-        else:
-            client.close()
-            raise AssertionError('SOCKS listener survived stopXray')
-    print(f'PASS: libXray {version}, generated Reality/TCP config, authenticated loopback SOCKS, anonymous rejection, 2 start/stop cycles. No remote connections.')
+    for name in ("xray-profile.json", "xray-profile-grpc.json"):
+        fixture = ROOT / 'app/build/test-artifacts' / name
+        if not fixture.exists():
+            fixture = ROOT / 'build/test-artifacts' / name
+        config = json.loads(fixture.read_text())
+        assert config['outbounds'][0]['settings']['vnext'][0]['address'] == '127.0.0.1', 'synthetic fixture required'
+        version = invoke('xrayVersion')['version']
+        for _ in range(2):
+            with socket.socket() as reserve:
+                reserve.bind(('127.0.0.1', 0))
+                port = reserve.getsockname()[1]
+            config['inbounds'][0]['port'] = port
+            invoke('testXray', {'xrayJson': json.dumps(config)})
+            try:
+                invoke('runXray', {'xrayJson': json.dumps(config)})
+                assert invoke('getXrayState')['running']
+                with socket.create_connection(('127.0.0.1', port), 2) as client:
+                    client.settimeout(2)
+                    client.sendall(bytes([5, 1, 2]))
+                    assert client.recv(2) == bytes([5, 2])
+                    user, password = b'test-user', b'synthetic-secret'
+                    client.sendall(bytes([1, len(user)]) + user + bytes([len(password)]) + password)
+                    assert client.recv(2) == bytes([1, 0]), 'SOCKS authentication rejected'
+                with socket.create_connection(('127.0.0.1', port), 2) as client:
+                    client.settimeout(2)
+                    client.sendall(bytes([5, 1, 0]))
+                    assert client.recv(2) == bytes([5, 255]), 'unauthenticated SOCKS unexpectedly accepted'
+            finally:
+                invoke('stopXray')
+            assert not invoke('getXrayState')['running']
+            try:
+                client = socket.create_connection(('127.0.0.1', port), .5)
+            except OSError:
+                pass
+            else:
+                client.close()
+                raise AssertionError('SOCKS listener survived stopXray')
+    print(f'PASS: libXray {version}, generated Reality TCP + gRPC configs, authenticated loopback SOCKS, anonymous rejection, 2 start/stop cycles each. No remote connections.')
 
 if __name__ == '__main__':
     main()

@@ -222,7 +222,7 @@ class WebBridge(
         val profile = if (config.mode == "XRAY") ProxyStore(context).profiles().firstOrNull { it.id == config.profileId } else null
         return state().put("uplink", uplink).put("route", "26.0.0.0/8").put("mtu", 1500)
             .put("proxy", JSONObject().put("mode", config.mode).put("host", profile?.host ?: config.host).put("port", profile?.port ?: config.port)
-                .put("profileName", profile?.name ?: JSONObject.NULL))
+                .put("profileName", profile?.name ?: JSONObject.NULL).put("network", profile?.network ?: JSONObject.NULL))
             .put("udpPolicy", if (EngineHost.transportLabel in setOf("SOCKS5", "XRAY_VLESS_REALITY")) "disabled; TCP relay only" else "upstream Wi-Fi policy")
             .put("logs", DiagnosticLog.json()).put("activity", JSONArray(repository.activity.value.map {
                 JSONObject().put("message", it.text).put("error", it.isError)

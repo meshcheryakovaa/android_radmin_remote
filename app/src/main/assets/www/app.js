@@ -74,14 +74,14 @@
   function profileOptions(profiles, selected) {
     const select = $('xrayProfile'); select.replaceChildren();
     if(!profiles?.length){const option=el('option','Сначала импортируйте JSON');option.value='';select.append(option);return;}
-    for(const p of profiles){const option=el('option',`${p.name} · ${p.host}:${p.port}`);option.value=p.id;select.append(option);}
+    for(const p of profiles){const option=el('option',`${p.network === "grpc" ? "gRPC" : "TCP"} · ${p.name} · ${p.host}:${p.port}`);option.value=p.id;select.append(option);}
     select.value=selected || profiles[0].id;
   }
   async function importProfiles(method, args={}) {
     const result=await call(method,args); if(result.cancelled)return;
     profileOptions(result.profiles,result.profileId);
     $('proxyForm').elements.mode.value='XRAY';modeFields();$('xrayJson').value='';
-    $('importResult').textContent=`Импортировано TCP профилей: ${result.imported}. Пропущено остальных записей: ${result.skipped}. Выберите сервер → Сохранить → Подключиться на Главной.`;
+    $('importResult').textContent=`Импортировано профилей: ${result.imported}. Пропущено остальных записей: ${result.skipped}. Выберите сервер → Сохранить → Подключиться на Главной.`;
   }
   $('importXray').onclick = () => action(async()=>{const text=$('xrayJson').value; if(!text.trim())throw new Error('Сначала вставьте JSON'); if(new TextEncoder().encode(text).length>512*1024)throw new Error('JSON превышает 512 КБ'); $('importXray').disabled=true;try{await importProfiles('Proxy.importJson',{text});}finally{$('importXray').disabled=false;} });
   $('importXrayFile').onclick = () => action(async()=>{ $('importXrayFile').disabled=true;try{await importProfiles('Proxy.importFile');}finally{$('importXrayFile').disabled=false;} });

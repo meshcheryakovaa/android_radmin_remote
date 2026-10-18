@@ -113,6 +113,12 @@ class OpenRadVpnService : VpnService() {
         if (!desired.get() || EngineHost.engine?.isRunning == true) return
         EngineHost.connectionError = null
         try {
+            // A failed engine can leave its native core READY while the terminal
+            // state watcher is still queued. Retire that session before any new
+            // start (also refreshes native DNS after changing Wi-Fi networks).
+            EngineHost.stop()
+            closeTun()
+            com.openrad.mobile.xray.XrayRuntime.stop()
             val store = com.openrad.mobile.proxy.ProxyStore(this)
             val config = store.load()
             selectedTransport = if (config.mode == "XRAY") {
@@ -133,7 +139,10 @@ class OpenRadVpnService : VpnService() {
             watchEngine()
         } catch (e: Exception) {
             EngineHost.connectionError = "Transport startup failed; see Diagnostics"
-            EngineHost.emit("Transport startup failed: ${e.javaClass.simpleName}", true)
+            val detail = e.message?.takeIf { Regex("XRAY_[A-Z_]+").matches(it) }?.let {
+                com.openrad.mobile.xray.XrayRuntime.lastError ?: it
+            } ?: e.javaClass.simpleName
+            EngineHost.emit("Transport startup failed: $detail", true)
             EngineHost.stop()
             closeTun()
             com.openrad.mobile.xray.XrayRuntime.stop()

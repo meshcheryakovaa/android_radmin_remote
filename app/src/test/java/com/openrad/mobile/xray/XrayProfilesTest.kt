@@ -14,7 +14,7 @@ class XrayProfilesTest {
         .put("tag", tag).put("protocol", "vless")
         .put("settings", JSONObject().put("vnext", JSONArray().put(JSONObject().put("address", "127.0.0.1")
             .put("port", 4443).put("users", JSONArray().put(JSONObject().put("id", uuid)
-                .put("flow", "xtls-rprx-vision").put("encryption", "none"))))))
+                .put("flow", if (network == "grpc") "" else "xtls-rprx-vision").put("encryption", "none"))))))
         .put("streamSettings", JSONObject().put("network", network).put("security", "reality")
             .put("realitySettings", JSONObject().put("serverName", "example.org").put("publicKey", publicKey)
                 .put("shortId", "50").put("fingerprint", "edge")))
@@ -23,8 +23,8 @@ class XrayProfilesTest {
     @Test fun importsOnlySupportedNodesFromMixedHappConfiguration() {
         val result = XrayImport.parse(document(outbound(), outbound("tcp", "Second"), outbound("grpc"), outbound("grpc"), outbound("grpc"),
             JSONObject().put("protocol", "freedom"), JSONObject().put("protocol", "blackhole")))
-        assertEquals(2, result.profiles.size)
-        assertEquals(5, result.skipped)
+        assertEquals(5, result.profiles.size)
+        assertEquals(2, result.skipped)
         assertNotEquals(result.profiles[0].id, result.profiles[1].id)
     }
 
@@ -73,7 +73,7 @@ class XrayProfilesTest {
     }
 
     @Test fun unsupportedOnlyImportHasActionableError() {
-        try { XrayImport.parse(document(outbound("grpc"))); fail("no TCP node") }
+        try { XrayImport.parse(document(outbound("ws"))); fail("no supported node") }
         catch (e: ProfileImportException) { assertTrue(e.message.orEmpty().contains("TCP")) }
     }
 
@@ -83,6 +83,56 @@ class XrayProfilesTest {
             try { XrayImport.parse(document(n)); fail("accepted invalid Reality field") }
             catch (e: ProfileImportException) { assertFalse(e.message.orEmpty().contains(value)) }
         }
+    }
+
+    @Test fun importsGrpcHappFieldsAndCompilesNativeConfiguration() {
+        val n = outbound("grpc")
+        n.getJSONObject("streamSettings").put("grpcSettings", JSONObject()
+            .put("serviceName", "synthetic.service").put("authority", "example.org").put("mode", false)
+            .put("arbitraryOption", "must-not-copy"))
+        val p = XrayImport.parse(document(n)).profiles.single()
+        assertEquals("grpc", p.network)
+        val config = JSONObject(p.runtimeJson(32123, "test-user", "synthetic-secret"))
+        val stream = config.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+        assertEquals("grpc", stream.getString("network"))
+        val grpc = stream.getJSONObject("grpcSettings")
+        assertEquals("synthetic.service", grpc.getString("serviceName"))
+        assertEquals("example.org", grpc.getString("authority"))
+        assertFalse(grpc.getBoolean("multiMode"))
+        assertFalse(grpc.has("mode"))
+        assertFalse(grpc.has("arbitraryOption"))
+        assertEquals(config.toString(), XrayProfile.restore(p.stored()).runtimeJson(32123, "test-user", "synthetic-secret"))
+        val f = File("build/test-artifacts/xray-profile-grpc.json")
+        f.parentFile?.mkdirs(); f.writeText(config.toString())
+    }
+
+    @Test fun preservesGrpcMultiModeAndRejectsVisionAndInvalidFields() {
+        for (mode in listOf<Any>(true, "multi")) {
+            val n = outbound("grpc")
+            n.getJSONObject("streamSettings").put("grpcSettings", JSONObject().put("mode", mode))
+            val p = XrayImport.parse(document(n)).profiles.single()
+            assertTrue(JSONObject(p.runtimeJson(1234, "a", "b")).getJSONArray("outbounds").getJSONObject(0)
+                .getJSONObject("streamSettings").getJSONObject("grpcSettings").getBoolean("multiMode"))
+        }
+        val vision = outbound("grpc")
+        vision.getJSONObject("settings").getJSONArray("vnext").getJSONObject(0)
+            .getJSONArray("users").getJSONObject(0).put("flow", "xtls-rprx-vision")
+        val badMode = outbound("grpc")
+        badMode.getJSONObject("streamSettings").put("grpcSettings", JSONObject().put("multiMode", "true"))
+        val badService = outbound("grpc")
+        badService.getJSONObject("streamSettings").put("grpcSettings", JSONObject().put("serviceName", "bad\nservice"))
+        val badSettings = outbound("grpc")
+        badSettings.getJSONObject("streamSettings").put("grpcSettings", "not-an-object")
+        for (n in listOf(vision, badMode, badService, badSettings)) {
+            try { XrayImport.parse(document(n)); fail("accepted invalid gRPC") }
+            catch (_: ProfileImportException) { }
+        }
+    }
+
+    @Test fun restoresOldTcpProfilesWithoutTransportField() {
+        val original = XrayImport.parse(document(outbound())).profiles.single()
+        val stored = original.stored().apply { remove("network"); remove("serviceName"); remove("authority"); remove("multiMode") }
+        assertEquals(original.runtimeJson(1234, "a", "b"), XrayProfile.restore(stored).runtimeJson(1234, "a", "b"))
     }
 
     @Test fun capsSizeBeforeParsingAndKeepsRawPayloadOutOfErrors() {

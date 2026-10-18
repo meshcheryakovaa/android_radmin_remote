@@ -48,14 +48,14 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.0-debug
+          tag_name: v0.2.1-debug
           target_commitish: ${{ github.sha }}
-          name: Android Radmin Remote 0.2.0 · debug
+          name: Android Radmin Remote 0.2.1 · debug
           prerelease: true
           files: app/build/outputs/apk/debug/app-debug.apk
           fail_on_unmatched_files: true
           body: |
-            Embedded libXray 26.10.10: import Xray/Happ JSON and select a VLESS Reality TCP profile.
+            Embedded libXray 26.10.10: import Xray/Happ JSON and select a VLESS Reality TCP or gRPC profile.
             Single APK: HTML UI, OpenRad engine, Direct / SOCKS5 / embedded Xray TCP relay.
-            TCP Reality only; gRPC and AUTO are not enabled. Real proxy connectivity requires manual validation.
+            Adds gRPC profile import and cleans up the previous Xray session before retrying. AUTO is not enabled. Mobile allowlist connectivity requires manual validation.
             Install app-debug.apk on Android 8.0+. See README for configuration.
