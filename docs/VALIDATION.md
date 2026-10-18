@@ -47,3 +47,11 @@ Not executed: native Android JNI loading, on-device protect(fd)/DNS callbacks, d
 - Synthetic loopback key/logon peer verifies SHA-512 signature, RSA-OAEP password, raw/copyrect/streaming-zlib pixels, Veyon feature framing, pointer/key messages, malformed lengths/rectangles and no authentication downgrade.
 - Playwright 1280/390/320px: network/search/online filters; 12 synthetic peers; 4 selected synthetic live images; view-only sends no input; explicit control; letterbox coordinates and keyboard; password clearing; no page errors or horizontal overflow.
 - Signed release build and release lint passed locally. Real Windows Veyon interoperability still requires manual acceptance on a user-controlled PC; the Veyon screenshots are explicitly synthetic.
+
+
+## 0.4.1 — sequential 30-PC thumbnail grid
+
+- JVM loopback suite: 158 tests, 157 passed, 1 upstream skipped, zero failures/errors. New regressions verify RGB332 with streaming zlib, a single snapshot without a second framebuffer request, and Veyon ScreenLock start/stop without framebuffer negotiation. Feature commands match independent Qt_5_5 QDataStream fixtures.
+- `scripts/test-classroom-ui.cjs`: 30 synthetic online PCs, every thumbnail obtained, maximum one concurrent thumbnail request, all 30 fit at 1280×800. No toolbar/headings/per-PC actions. Minimum refresh age respected. Viewing/controlling suspends the queue, returning closes the desktop before resuming. Slow in-flight image cancellation, view-only input gate, lock/unlock actions and persisted refresh/width/quality verified. No JS errors or horizontal overflow at 1280/1536/390/320px. Screenshots `v041-*-synthetic.png` are synthetic fixtures.
+- Native snapshots have a 15s total deadline, a try-lock preventing a native backlog, epoch/engine/peer checks, and RGB332/zlib transport. Credentials remain encrypted; original frames are disposed after one JPEG. The width/quality settings affect the locally encoded thumbnail, not the original RFB server framebuffer resolution.
+- User screenshot from 0.4.0 confirms a real Veyon image. The new 30-PC sweep and ScreenLock feature still require classroom acceptance on Windows. No real classroom connection is used by automated tests.

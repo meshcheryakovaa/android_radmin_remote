@@ -100,10 +100,15 @@ class MainActivity : ComponentActivity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
                 if (request.url.scheme == "https" && request.url.authority == "appassets.androidplatform.net" &&
-                    request.url.path?.startsWith("/remote/frame/") == true && ::bridge.isInitialized) {
+                    (request.url.path?.startsWith("/remote/frame/") == true || request.url.path?.startsWith("/remote/thumb/") == true) && ::bridge.isInitialized) {
                     val id = request.url.lastPathSegment.orEmpty()
                     val width = request.url.getQueryParameter("width")?.toIntOrNull() ?: 400
-                    val bytes = runCatching { bridge.remote.image(id, width) }.getOrNull()
+                    val bytes = runCatching {
+                        if (request.url.path?.startsWith("/remote/thumb/") == true) {
+                            val token = request.url.getQueryParameter("epoch")?.toLongOrNull() ?: return@runCatching null
+                            bridge.remote.thumbnail(id.toLongOrNull() ?: return@runCatching null, token)
+                        } else bridge.remote.image(id, width)
+                    }.getOrNull()
                     return WebResourceResponse(if (bytes != null) "image/jpeg" else "text/plain", null,
                         if (bytes != null) 200 else 503, if (bytes != null) "OK" else "Unavailable",
                         mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"),

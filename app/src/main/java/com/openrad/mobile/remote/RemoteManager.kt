@@ -15,7 +15,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
 
-/** Activity-owned sessions; credentials encrypted, frames RAM-only, max four explicitly selected peers. */
+/** One foreground desktop or one sequential snapshot. Only small JPEGs remain in the grid. */
 class RemoteManager(context: Context) {
     private val app = context.applicationContext
     private val prefs by lazy { EncryptedSharedPreferences.create(app, "veyon_remote",
@@ -25,6 +25,11 @@ class RemoteManager(context: Context) {
     private val generation = java.util.concurrent.atomic.AtomicLong()
     private val sessions = LinkedHashMap<String, Session>()
     private val pixels = HashMap<String, Int>()
+    private val thumbnailLock = java.util.concurrent.locks.ReentrantLock()
+    @Volatile private var thumbnailSocket: Socket? = null
+    @Volatile private var gridEnabled = false
+    private val gridEpoch = java.util.concurrent.atomic.AtomicLong()
+    @Volatile private var commandSocket: Socket? = null
     @Volatile private var disabled = false
     private val pixelLimit = minOf(12_000_000L,
         (app.getSystemService(android.app.ActivityManager::class.java)?.memoryClass ?: 128) * 1024L * 1024 / 24)
@@ -51,15 +56,26 @@ class RemoteManager(context: Context) {
         .put("username", prefs.getString("username", "")).put("keyName", prefs.getString("keyName", "teacher"))
         .put("port", prefs.getInt("port", 11100)).put("hasKey", !prefs.getString("privateKey", "").isNullOrEmpty())
         .put("hasPassword", !prefs.getString("password", "").isNullOrEmpty())
+        .put("refreshMs", prefs.getInt("refreshMs", 2000)).put("thumbnailWidth", prefs.getInt("thumbnailWidth", 240))
+        .put("jpegQuality", prefs.getInt("jpegQuality", 45)).put("network", prefs.getString("network", ""))
+        .put("onlineOnly", prefs.getBoolean("onlineOnly", true))
     @Synchronized fun save(a: JSONObject): JSONObject {
-        noActive()
+        noActive(); stopThumbnail()
         val mode = a.optString("mode", "key"); val username = a.optString("username", "")
         val keyName = a.optString("keyName", "teacher"); val port = a.optInt("port", 11100)
         if (mode !in setOf("key", "logon") || port !in 1..65535 || username.length > 256 || username.any { it.isISOControl() } ||
             !Regex("[A-Za-z0-9_-]{1,64}").matches(keyName)) throw RemoteError("INVALID_SETTINGS")
+        val refreshMs = a.optInt("refreshMs", prefs.getInt("refreshMs", 2000))
+        val thumbnailWidth = a.optInt("thumbnailWidth", prefs.getInt("thumbnailWidth", 240))
+        val jpegQuality = a.optInt("jpegQuality", prefs.getInt("jpegQuality", 45))
+        val network = a.optString("network", prefs.getString("network", "").orEmpty())
+        if (refreshMs !in 250..60000 || thumbnailWidth !in 160..480 || jpegQuality !in 25..80 || network.length > 128)
+            throw RemoteError("INVALID_SETTINGS")
         val password = a.optString("password", "")
         if (password.length > 512 || password.any { it == '\u0000' }) throw RemoteError("INVALID_SETTINGS")
         val edit = prefs.edit().putString("mode", mode).putString("username", username).putString("keyName", keyName).putInt("port", port)
+        edit.putInt("refreshMs", refreshMs).putInt("thumbnailWidth", thumbnailWidth).putInt("jpegQuality", jpegQuality)
+            .putString("network", network).putBoolean("onlineOnly", a.optBoolean("onlineOnly", prefs.getBoolean("onlineOnly", true)))
         if (a.optBoolean("clearPassword")) edit.remove("password") else if (password.isNotEmpty()) edit.putString("password", password)
         if (a.optBoolean("clearKey")) edit.remove("privateKey")
         if (!edit.commit()) throw RemoteError("SETTINGS_SAVE_FAILED")
@@ -78,18 +94,9 @@ class RemoteManager(context: Context) {
         val ip = Ip.format(peer.vip)
         if (!ip.startsWith("26.")) throw RemoteError("PEER_NOT_CONNECTED")
         sessions.values.firstOrNull { it.rid == rid && valid(it) }?.let { return status(it) }
-        if (sessions.values.count { valid(it) } >= 4) throw RemoteError("SESSION_LIMIT")
-        val mode = prefs.getString("mode", "key")
-        val auth = if (mode == "key") {
-            val pem = prefs.getString("privateKey", "").orEmpty()
-            if (pem.isEmpty()) throw RemoteError("CREDENTIALS_REQUIRED")
-            VeyonClient.Auth(prefs.getString("username", "").orEmpty().ifEmpty { "android-teacher" },
-                keyName = prefs.getString("keyName", "teacher").orEmpty(), privateKey = VeyonWire.privateKey(pem))
-        } else {
-            val user = prefs.getString("username", "").orEmpty(); val pass = prefs.getString("password", "").orEmpty()
-            if (user.isBlank() || pass.isEmpty()) throw RemoteError("CREDENTIALS_REQUIRED")
-            VeyonClient.Auth(user, pass.toByteArray(Charsets.UTF_8))
-        }
+        stopThumbnail()
+        sessions.values.filter { !it.closed }.forEach { finish(it) }
+        val auth = credentials()
         // Retire old errors for this peer and bound the retained session metadata.
         sessions.values.filter { it.closed && it.rid == rid }.map { it.id }.forEach { sessions.remove(it) }
         while (sessions.size >= 64) { val old = sessions.values.firstOrNull { it.closed } ?: break; sessions.remove(old.id) }
@@ -103,11 +110,11 @@ class RemoteManager(context: Context) {
                 socket.keepAlive = true; socket.tcpNoDelay = true; socket.soTimeout = 60000
                 // No protect(): desktop traffic must enter the established Radmin TUN.
                 socket.connect(InetSocketAddress(s.ip, port), 10000)
-                val client = VeyonClient(socket) { n -> synchronized(this) {
+                val client = VeyonClient(socket, { n -> synchronized(this) {
                     if (!valid(s)) throw RemoteError("VPN_REQUIRED")
                     if (pixels.filterKeys { it != s.id }.values.sum().toLong() + n > pixelLimit) throw RemoteError("MEMORY_LIMIT")
                     pixels[s.id] = n
-                } }
+                } })
                 s.client = client
                 if (!valid(s)) throw RemoteError("VPN_REQUIRED")
                 client.handshake(auth)
@@ -124,6 +131,114 @@ class RemoteManager(context: Context) {
             }
         }, "veyon-${s.id.take(8)}").also { s.worker = it; it.isDaemon = true; it.start() }
         return status(s)
+    }
+    private fun credentials(): VeyonClient.Auth {
+        val mode = prefs.getString("mode", "key")
+        return if (mode == "key") {
+            val pem = prefs.getString("privateKey", "").orEmpty()
+            if (pem.isEmpty()) throw RemoteError("CREDENTIALS_REQUIRED")
+            VeyonClient.Auth(prefs.getString("username", "").orEmpty().ifEmpty { "android-teacher" },
+                keyName = prefs.getString("keyName", "teacher").orEmpty(), privateKey = VeyonWire.privateKey(pem))
+        } else {
+            val user = prefs.getString("username", "").orEmpty(); val pass = prefs.getString("password", "").orEmpty()
+            if (user.isBlank() || pass.isEmpty()) throw RemoteError("CREDENTIALS_REQUIRED")
+            VeyonClient.Auth(user, pass.toByteArray(Charsets.UTF_8))
+        }
+    }
+    @Synchronized fun grid(enabled: Boolean): Long {
+        stopThumbnail()
+        gridEnabled = enabled && !disabled && sessions.values.none { !it.closed }
+        return gridEpoch.get()
+    }
+    private fun stopThumbnail() {
+        gridEnabled = false
+        gridEpoch.incrementAndGet()
+        runCatching { thumbnailSocket?.close() }
+    }
+    /** WebView image request; never hold the manager monitor while waiting on a network peer. */
+    fun thumbnail(rid: Long, token: Long): ByteArray? {
+        if (!thumbnailLock.tryLock()) return null // no native backlog on slow links
+        var client: VeyonClient? = null
+        var auth: VeyonClient.Auth? = null
+        var deadline: java.util.concurrent.ScheduledFuture<*>? = null
+        val socket = Socket()
+        try {
+            val engine: Any
+            val ip: String
+            val port: Int
+            val width: Int
+            val quality: Int
+            synchronized(this) {
+                requireReady()
+                if (!gridEnabled || token != gridEpoch.get()) return null
+                val peer = EngineHost.state.value.peers.firstOrNull { it.rid == rid && it.link == LinkState.CONNECTED }
+                    ?: return null
+                ip = Ip.format(peer.vip)
+                if (!ip.startsWith("26.")) return null
+                engine = EngineHost.engine ?: return null
+                port = prefs.getInt("port", 11100); width = prefs.getInt("thumbnailWidth", 240); quality = prefs.getInt("jpegQuality", 45)
+                auth = credentials()
+                thumbnailSocket = socket
+            }
+            fun active() = ready() && gridEnabled && token == gridEpoch.get() && EngineHost.engine === engine &&
+                EngineHost.state.value.peers.any { it.rid == rid && it.link == LinkState.CONNECTED && Ip.format(it.vip) == ip }
+            deadline = closer.schedule({ runCatching { socket.close() } }, 15, java.util.concurrent.TimeUnit.SECONDS)
+            socket.tcpNoDelay = true; socket.soTimeout = 10000
+            if (!active()) return null
+            socket.connect(InetSocketAddress(ip, port), 5000)
+            client = VeyonClient(socket, { n -> synchronized(this) {
+                if (!active()) throw RemoteError("VPN_REQUIRED")
+                if (pixels.filterKeys { it != "thumbnail" }.values.sum().toLong() + n > pixelLimit) throw RemoteError("MEMORY_LIMIT")
+                pixels["thumbnail"] = n
+            } }, thumbnail = true)
+            client.handshake(requireNotNull(auth))
+            while (active() && client.serial == 0L) client.readUpdate(autoRequest = false)
+            if (!active()) return null
+            val frame = client.frame() ?: return null
+            val bytes = jpeg(frame, width, quality)
+            return if (active()) bytes else null
+        } catch (_: Exception) { return null
+        } finally {
+            deadline?.cancel(false); auth?.wipe(); runCatching { client?.dispose() }; runCatching { socket.close() }
+            synchronized(this) { if (thumbnailSocket === socket) thumbnailSocket = null; pixels.remove("thumbnail") }
+            thumbnailLock.unlock()
+        }
+    }
+    /** Lock/unlock are authenticated Veyon feature commands, with no framebuffer requested. */
+    fun lock(rid: Long, enabled: Boolean): Boolean {
+        val socket = Socket()
+        val auth: VeyonClient.Auth
+        val engine: Any
+        val ip: String
+        val port: Int
+        synchronized(this) {
+            requireReady(); stopThumbnail()
+            if (commandSocket != null) throw RemoteError("SESSION_NOT_READY")
+            val peer = EngineHost.state.value.peers.firstOrNull { it.rid == rid && it.link == LinkState.CONNECTED }
+                ?: throw RemoteError("PEER_NOT_CONNECTED")
+            ip = Ip.format(peer.vip)
+            if (!ip.startsWith("26.")) throw RemoteError("PEER_NOT_CONNECTED")
+            engine = EngineHost.engine ?: throw RemoteError("VPN_REQUIRED")
+            auth = credentials(); port = prefs.getInt("port", 11100); commandSocket = socket
+        }
+        val deadline = closer.schedule({ runCatching { socket.close() } }, 15, java.util.concurrent.TimeUnit.SECONDS)
+        var client: VeyonClient? = null
+        try {
+            socket.soTimeout = 10000; socket.tcpNoDelay = true
+            socket.connect(InetSocketAddress(ip, port), 5000)
+            client = VeyonClient(socket)
+            client.handshake(auth, startFrames = false)
+            synchronized(this) {
+                if (!ready() || EngineHost.engine !== engine || commandSocket !== socket ||
+                    EngineHost.state.value.peers.none { it.rid == rid && it.link == LinkState.CONNECTED && Ip.format(it.vip) == ip })
+                    throw RemoteError("PEER_NOT_CONNECTED")
+                client.screenLock(enabled)
+            }
+            return true // command sent; the plugin does not acknowledge applied lock state
+        } finally {
+            auth.wipe(); deadline.cancel(false); client?.dispose(); runCatching { socket.close() }
+            synchronized(this) { if (commandSocket === socket) commandSocket = null }
+        }
     }
     private fun valid(s: Session) = !s.closed && ready() && EngineHost.engine === s.epoch && s.activityEpoch == generation.get() &&
         EngineHost.state.value.peers.any { it.rid == s.rid && it.link == LinkState.CONNECTED && Ip.format(it.vip) == s.ip }
@@ -198,15 +313,16 @@ class RemoteManager(context: Context) {
             val now = System.nanoTime() / 1_000_000
             if (s.image != null && s.imageWidth == w && (s.imageSerial == client.serial || now - s.imageAt < 200)) return s.image
             val frame = client.frame() ?: return null
-            val bitmap = Bitmap.createBitmap(frame.pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
-            val targetW = minOf(w, frame.width); val targetH = maxOf(1, (frame.height.toLong() * targetW / frame.width).toInt())
-            val scaled = if (targetW == frame.width) bitmap else Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
-            try {
-                val out = ByteArrayOutputStream(); scaled.compress(Bitmap.CompressFormat.JPEG, 65, out)
-                s.image = out.toByteArray(); s.imageSerial = frame.serial; s.imageWidth = w; s.imageAt = now
-                return s.image
-            } finally { if (scaled !== bitmap) scaled.recycle(); bitmap.recycle() }
+            s.image = jpeg(frame, w, 65); s.imageSerial = frame.serial; s.imageWidth = w; s.imageAt = now
+            return s.image
         }
+    }
+    private fun jpeg(frame: VeyonClient.Frame, width: Int, quality: Int): ByteArray {
+        val bitmap = Bitmap.createBitmap(frame.pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+        val targetW = minOf(width, frame.width); val targetH = maxOf(1, (frame.height.toLong() * targetW / frame.width).toInt())
+        val scaled = if (targetW == frame.width) bitmap else Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+        try { return ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, quality, it) }.toByteArray() }
+        finally { if (scaled !== bitmap) scaled.recycle(); bitmap.recycle() }
     }
     private fun finish(s: Session) = synchronized(s) {
         if (s.closed) return@synchronized
@@ -221,9 +337,10 @@ class RemoteManager(context: Context) {
         }
     }
     @Synchronized fun close(id: String) { sessions[id]?.let { finish(it) } }
-    @Synchronized fun closeAll() { sessions.values.toList().forEach { finish(it) } }
+    @Synchronized fun closeAll() { stopThumbnail(); runCatching { commandSocket?.close() }; sessions.values.toList().forEach { finish(it) } }
     fun pause() {
         disabled = true
+        stopThumbnail(); runCatching { commandSocket?.close() }
         val epoch = generation.incrementAndGet()
         // Never block Android's main lifecycle thread on a desktop socket write.
         Thread({

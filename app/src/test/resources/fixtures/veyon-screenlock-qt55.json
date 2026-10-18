@@ -1,0 +1,13 @@
+{
+  "generator": "PySide6 QDataStream Qt_5_5 (UUID, int, empty QVariantMap)",
+  "vectors": [
+    {
+      "enabled": true,
+      "hex": "29000000270000001e00ccb535a21d244cc1a7098b47d2b2ac79000000020000000000000000080000000000"
+    },
+    {
+      "enabled": false,
+      "hex": "29000000270000001e00ccb535a21d244cc1a7098b47d2b2ac79000000020000000001000000080000000000"
+    }
+  ]
+}

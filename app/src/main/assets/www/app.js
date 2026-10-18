@@ -54,6 +54,7 @@
     currentPage = b.dataset.page;
     document.querySelectorAll('.page').forEach(p => p.hidden = p.id !== currentPage);
     document.querySelectorAll('[data-page]').forEach(n => { if(n===b)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current'); });
+    window.Classroom?.pageChanged(currentPage);
     if (currentPage === 'diagnostics') await diagnostics();
   }));
   document.querySelectorAll('[data-action]').forEach(b => b.onclick = () => action(async () => { b.disabled = true; try { await call('Radmin.' + b.dataset.action); } finally { b.disabled = false; } }));

@@ -55,6 +55,18 @@ object VeyonWire {
         if (bytes.size() > MAX_MESSAGE) throw RemoteError("INVALID_MESSAGE")
         output.writeInt(bytes.size()); bytes.writeTo(output); output.flush()
     }
+    /** Fixed Veyon ScreenLock feature: UUID QVariant, signed command, empty QVariantMap. */
+    fun screenLock(output: DataOutputStream, enabled: Boolean) {
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(bytes).use { stream ->
+            val uid = java.util.UUID.fromString("ccb535a2-1d24-4cc1-a709-8b47d2b2ac79")
+            stream.writeInt(30); stream.writeByte(0)
+            stream.writeLong(uid.mostSignificantBits); stream.writeLong(uid.leastSignificantBits)
+            stream.writeInt(2); stream.writeByte(0); stream.writeInt(if (enabled) 0 else 1)
+            stream.writeInt(8); stream.writeByte(0); stream.writeInt(0)
+        }
+        output.writeByte(41); output.writeInt(bytes.size()); bytes.writeTo(output); output.flush()
+    }
     fun skipMessage(input: DataInputStream) {
         val size = input.readInt()
         if (size !in 0..MAX_MESSAGE) throw RemoteError("INVALID_MESSAGE")

@@ -10,6 +10,7 @@ import java.util.zip.Inflater
 class VeyonClient(
     private val socket: Socket,
     private val reservePixels: (Int) -> Unit = {},
+    private val thumbnail: Boolean = false,
 ) : Closeable {
     class Auth(val username: String, val password: ByteArray? = null, val keyName: String = "", val privateKey: PrivateKey? = null) {
         fun wipe() { password?.fill(0) }
@@ -28,7 +29,7 @@ class VeyonClient(
     @Volatile private var closed = false
     private val inflater = Inflater()
 
-    fun handshake(auth: Auth) {
+    fun handshake(auth: Auth, startFrames: Boolean = true) {
         try {
             val greeting = ByteArray(12); input.readFully(greeting)
             val version = greeting.toString(Charsets.US_ASCII)
@@ -66,11 +67,13 @@ class VeyonClient(
             if (w == 0 || h == 0) throw RemoteError("ACCESS_DENIED")
             val format = ByteArray(16); input.readFully(format)
             skip(input.readInt(), 16384) // Desktop name is not trusted or exposed.
+            if (!startFrames) { width = w; height = h; socket.soTimeout = 0; return }
             resize(w, h)
             synchronized(outputLock) {
-                output.write(byteArrayOf(0, 0, 0, 0, 16, 16, 0, 1))
-                output.writeShort(31); output.writeShort(63); output.writeShort(31)
-                output.write(byteArrayOf(11, 5, 0, 0, 0, 0)) // RGB565, little endian.
+                // RGB332 for snapshots halves uncompressed wire bytes; zlib stays enabled.
+                output.write(byteArrayOf(0, 0, 0, 0, if (thumbnail) 8 else 16, if (thumbnail) 8 else 16, 0, 1))
+                output.writeShort(if (thumbnail) 7 else 31); output.writeShort(if (thumbnail) 7 else 63); output.writeShort(if (thumbnail) 3 else 31)
+                output.write(if (thumbnail) byteArrayOf(0, 3, 6, 0, 0, 0) else byteArrayOf(11, 5, 0, 0, 0, 0))
                 val encodings = intArrayOf(6, 1, 0, -223, -224) // zlib, copyrect, raw, resize, lastrect
                 output.writeByte(2); output.writeByte(0); output.writeShort(encodings.size)
                 encodings.forEach { output.writeInt(it) }; output.flush()
@@ -97,7 +100,7 @@ class VeyonClient(
             output.writeShort(width); output.writeShort(height); output.flush()
         }
     }
-    fun readUpdate() {
+    fun readUpdate(autoRequest: Boolean = true) {
         when (input.readUnsignedByte()) {
             0 -> {
                 input.readByte(); val count = input.readUnsignedShort()
@@ -114,7 +117,7 @@ class VeyonClient(
                     if (processedPixels > width.toLong() * height * 4) throw RemoteError("INVALID_MESSAGE")
                     when (encoding) {
                         0, 6 -> {
-                            val bytes = ByteArray(w * h * 2)
+                            val bytes = ByteArray(w * h * if (thumbnail) 1 else 2)
                             if (encoding == 0) input.readFully(bytes) else {
                                 val size = input.readInt()
                                 if (size !in 1..16_777_216) throw RemoteError("INVALID_MESSAGE")
@@ -136,8 +139,11 @@ class VeyonClient(
                             synchronized(frameLock) {
                                 var source = 0
                                 for (row in 0 until h) for (col in 0 until w) {
-                                    val p = (bytes[source++].toInt() and 255) or ((bytes[source++].toInt() and 255) shl 8)
-                                    val r = (p ushr 11) * 255 / 31; val g = ((p ushr 5) and 63) * 255 / 63; val b = (p and 31) * 255 / 31
+                                    val p = if (thumbnail) bytes[source++].toInt() and 255 else
+                                        (bytes[source++].toInt() and 255) or ((bytes[source++].toInt() and 255) shl 8)
+                                    val r = if (thumbnail) (p and 7) * 255 / 7 else (p ushr 11) * 255 / 31
+                                    val g = if (thumbnail) ((p ushr 3) and 7) * 255 / 7 else ((p ushr 5) and 63) * 255 / 63
+                                    val b = if (thumbnail) ((p ushr 6) and 3) * 255 / 3 else (p and 31) * 255 / 31
                                     pixels[(y + row) * width + x + col] = (255 shl 24) or (r shl 16) or (g shl 8) or b
                                 }
                             }
@@ -157,7 +163,7 @@ class VeyonClient(
                     if (i == 4095 && count > 4096) throw RemoteError("INVALID_MESSAGE")
                 }
                 if (changed) synchronized(frameLock) { serial++ }
-                Thread.sleep(intervalMs.coerceIn(250, 3000)); request(true)
+                if (autoRequest) { Thread.sleep(intervalMs.coerceIn(100, 60000)); request(true) }
             }
             1 -> { input.readByte(); input.readUnsignedShort(); skip(input.readUnsignedShort() * 6) }
             2 -> Unit // Bell
@@ -174,6 +180,10 @@ class VeyonClient(
     fun key(key: Int, down: Boolean) = synchronized(outputLock) {
         if (closed || key !in 1..0x11ffff_ff) throw RemoteError("INVALID_INPUT")
         output.writeByte(4); output.writeBoolean(down); output.writeShort(0); output.writeInt(key); output.flush()
+    }
+    fun screenLock(enabled: Boolean) = synchronized(outputLock) {
+        if (closed) throw RemoteError("SESSION_NOT_READY")
+        VeyonWire.screenLock(output, enabled)
     }
     override fun close() {
         closed = true; runCatching { socket.close() }

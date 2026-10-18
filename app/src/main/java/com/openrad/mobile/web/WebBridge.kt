@@ -83,6 +83,8 @@ class WebBridge(
         "Remote.getConfig" -> remote.config()
         "Remote.saveConfig" -> remote.save(a)
         "Remote.importKey" -> importFile()?.let { remote.importKey(it) } ?: JSONObject().put("cancelled", true)
+        "Remote.grid" -> remote.grid(a.getBoolean("enabled"))
+        "Remote.lock" -> remote.lock(a.getLong("rid"), a.getBoolean("enabled"))
         "Remote.open" -> remote.open(a.getLong("rid"))
         "Remote.list" -> remote.list()
         "Remote.close" -> { remote.close(a.getString("id")); true }

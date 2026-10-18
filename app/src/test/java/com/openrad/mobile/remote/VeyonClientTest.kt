@@ -38,10 +38,10 @@ class VeyonClientTest {
             catch (_:IOException) { }
         }
     }
-    private fun runSession(keyAuth:Boolean, nulBanner:Boolean=false) {
+    private fun runSession(keyAuth:Boolean, nulBanner:Boolean=false, snapshot:Boolean=false, featureOnly:Boolean=false) {
         val pair=KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair()
         val worker=Executors.newSingleThreadExecutor { Thread(it, "synthetic-veyon").apply { isDaemon=true } }
-        ServerSocket(0,1,java.net.InetAddress.getByName("127.0.0.1")).use { listener ->
+        try { ServerSocket(0,1,java.net.InetAddress.getByName("127.0.0.1")).use { listener ->
             val peer=worker.submit<Unit> {
                 listener.accept().use { s ->
                     s.soTimeout=5000;val i=DataInputStream(s.getInputStream());val o=DataOutputStream(s.getOutputStream())
@@ -65,11 +65,27 @@ class VeyonClientTest {
                     }
                     o.writeInt(0);o.flush();assertEquals(1,i.readUnsignedByte())
                     o.writeShort(2);o.writeShort(2);o.write(ByteArray(16));o.writeInt(4);o.write("test".toByteArray());o.flush()
-                    val format=ByteArray(20);i.readFully(format);assertEquals(16,format[4].toInt());assertEquals(1,format[7].toInt())
+                    if(featureOnly){
+                        for(enabled in listOf(true,false)) {
+                            val fixture=JSONObject((javaClass.getResource("/fixtures/veyon-screenlock-qt55.json") ?: error("missing Qt fixture")).readText()).getJSONArray("vectors")
+                            val expected=hex(fixture.getJSONObject(if(enabled)0 else 1).getString("hex"))
+                            val actual=ByteArray(expected.size);i.readFully(actual);assertArrayEquals(expected,actual)
+                        }
+                        assertEquals(-1,i.read());return@submit
+                    }
+                    val format=ByteArray(20);i.readFully(format);assertEquals(if(snapshot)8 else 16,format[4].toInt());assertEquals(1,format[7].toInt())
                     assertEquals(2,i.readUnsignedByte());i.readByte();val count=i.readUnsignedShort();assertEquals(5,count)
                     assertEquals(listOf(6,1,0,-223,-224),List(count){i.readInt()})
                     fun request(incremental:Boolean){assertEquals(3,i.readUnsignedByte());assertEquals(incremental,i.readBoolean());assertEquals(0,i.readUnsignedShort());assertEquals(0,i.readUnsignedShort());assertEquals(2,i.readUnsignedShort());assertEquals(2,i.readUnsignedShort())}
                     fun rect(encoding:Int,data:ByteArray){o.write(byteArrayOf(0,0,0,1));o.writeShort(0);o.writeShort(0);o.writeShort(2);o.writeShort(2);o.writeInt(encoding);if(encoding==6)o.writeInt(data.size);o.write(data);o.flush()}
+                    if(snapshot){
+                        assertArrayEquals(byteArrayOf(8,8,0,1,0,7,0,7,0,3,0,3,6,0,0,0),format.copyOfRange(4,20))
+                        request(false)
+                        val deflater=Deflater();val bytes=ByteArray(1024)
+                        try{deflater.setInput(hex("0738c0ff"));val n=deflater.deflate(bytes,0,bytes.size,Deflater.SYNC_FLUSH);rect(6,bytes.copyOf(n))}finally{deflater.end()}
+                        // Snapshot mode must close after one image, without requesting another full/incremental frame.
+                        assertEquals(-1,i.read());return@submit
+                    }
                     request(false);rect(0,hex("00f8e0071f00ffff"));request(true)
                     assertEquals(5,i.readUnsignedByte());assertEquals(1,i.readUnsignedByte());assertEquals(1,i.readUnsignedShort());assertEquals(1,i.readUnsignedShort())
                     assertEquals(4,i.readUnsignedByte());assertEquals(1,i.readUnsignedByte());i.readUnsignedShort();assertEquals(0xff0d,i.readInt())
@@ -87,9 +103,15 @@ class VeyonClientTest {
             }
             val socket=Socket("127.0.0.1",listener.localPort);socket.soTimeout=5000
             val auth=if(keyAuth)VeyonClient.Auth("synthetic-user",keyName="teacher",privateKey=pair.private)else VeyonClient.Auth("synthetic-user","synthetic-password".toByteArray())
-            val client=VeyonClient(socket);client.intervalMs=250
+            val client=VeyonClient(socket,thumbnail=snapshot);client.intervalMs=250
             try {
-                client.handshake(auth);assertTrue(auth.password==null||auth.password.all{it==0.toByte()})
+                client.handshake(auth,startFrames=!featureOnly);assertTrue(auth.password==null||auth.password.all{it==0.toByte()})
+                if(featureOnly){client.screenLock(true);client.screenLock(false);client.close();peer.get(5,TimeUnit.SECONDS);return}
+                if(snapshot){
+                    client.readUpdate(autoRequest=false)
+                    assertArrayEquals(intArrayOf(0xffff0000.toInt(),0xff00ff00.toInt(),0xff0000ff.toInt(),0xffffffff.toInt()),client.frame()?.pixels)
+                    client.close();peer.get(5,TimeUnit.SECONDS);return
+                }
                 client.readUpdate();val frame=client.frame() ?: error("missing frame")
                 assertArrayEquals(intArrayOf(0xffff0000.toInt(),0xff00ff00.toInt(),0xff0000ff.toInt(),0xffffffff.toInt()),frame.pixels)
                 client.pointer(1,1,1);client.key(0xff0d,true)
@@ -102,11 +124,13 @@ class VeyonClientTest {
                 peer.get(5,TimeUnit.SECONDS)
             } finally {client.dispose()}
         }
-        worker.shutdownNow()
+        } finally { worker.shutdownNow() }
     }
     @Test fun authenticatesWithVeyonRsaKeyAndDecodesFramebufferAndInput()=runSession(true)
     @Test fun authenticatesWithRsaOaepLogonAndDecodesStreamingZlib()=runSession(false)
     @Test fun acceptsVeyonNulBannerButRepliesWithStandardNewline()=runSession(true,true)
+    @Test fun snapshotUsesRgb332ZlibAndNeverRequestsAnotherFrame()=runSession(true,snapshot=true)
+    @Test fun sendsLockAndUnlockWithoutRequestingFramebuffer()=runSession(true,featureOnly=true)
     @Test fun restoresPkcs8PrivateKeyAndRejectsPublicOrEncryptedKey() {
         val pair=KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair()
         val pem="-----BEGIN PRIVATE KEY-----\n"+Base64.getEncoder().encodeToString(pair.private.encoded)+"\n-----END PRIVATE KEY-----"

@@ -52,15 +52,15 @@ jobs:
         run: |
           ./gradlew :app:assembleRelease --no-build-cache --stacktrace
           mkdir -p build/release-apks
-          cp app/build/outputs/apk/release/app-release.apk build/release-apks/android-radmin-remote-0.4.0.apk
-          signer_digest=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs build/release-apks/android-radmin-remote-0.4.0.apk | awk '/certificate SHA-256 digest:/ {print $NF; exit}')
+          cp app/build/outputs/apk/release/app-release.apk build/release-apks/android-radmin-remote-0.4.1.apk
+          signer_digest=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs build/release-apks/android-radmin-remote-0.4.1.apk | awk '/certificate SHA-256 digest:/ {print $NF; exit}')
           test "$signer_digest" = "$(cat release-signing-certificate.sha256)"
       - name: Upload signed main APK
         if: steps.signing.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: android-radmin-remote-0.4.0
-          path: build/release-apks/android-radmin-remote-0.4.0.apk
+          name: android-radmin-remote-0.4.1
+          path: build/release-apks/android-radmin-remote-0.4.1.apk
           if-no-files-found: error
       - name: Upload test reports
         if: always()
@@ -73,19 +73,19 @@ jobs:
         if: steps.signing.outputs.ready == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.4.0
+          tag_name: v0.4.1
           target_commitish: ${{ github.sha }}
-          name: Android Radmin Remote 0.4.0
+          name: Android Radmin Remote 0.4.1
           prerelease: true
-          files: build/release-apks/android-radmin-remote-0.4.0.apk
+          files: build/release-apks/android-radmin-remote-0.4.1.apk
           fail_on_unmatched_files: true
           body: |
-            Classroom dashboard: direct Veyon RFB 11100, key/logon authentication, up to four live screens, view/control, pointer and keyboard.
+            Clean classroom grid: 30 visible thumbnails, sequential RGB332/zlib snapshots, configurable refresh in milliseconds, width and JPEG quality. Tap a PC for view, control, Veyon lock or unlock. Thumbnail connections stop while viewing/controlling a PC.
             Preserves Direct / SOCKS5 / embedded VLESS Reality TCP and gRPC VPN.
             Android package: ru.meshcheryakov.androidradminremote. Android 8.0+.
             Uses the permanent release certificate; updates must keep this same key and package.
-            Updates the main 0.3.0 with the same certificate. VPN identity/settings are retained on a normal update.
-            Veyon authentication and framebuffer/input are verified on synthetic loopback peers and independent Qt wire fixtures. Real Windows interoperability requires manual validation.
+            Updates the main 0.3.0 / 0.4.0 with the same certificate. VPN identity/settings are retained on a normal update.
+            Veyon authentication and framebuffer/input are verified on synthetic loopback peers and independent Qt wire fixtures. The user confirmed a real Veyon image on 0.4.0. The new 30-PC sweep and ScreenLock command require classroom acceptance.
       - name: Remove temporary signing files
         if: always() && steps.signing.outputs.ready == 'true'
         env:
