@@ -43,3 +43,5 @@ ANDROID_RELEASE_SIGNING_B64.txt
 signing.json
 signing.properties
 radmin-release-signing-backup.zip
+
+app/libs/.*.aar.*

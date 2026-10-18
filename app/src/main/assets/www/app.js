@@ -8,7 +8,7 @@
     if (!native) return Promise.reject(new Error('Откройте этот интерфейс внутри Android APK. Браузер не подключается к VPN.'));
     return new Promise((resolve, reject) => {
       const id = String(++serial);
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('Нет ответа. Проверьте разрешение VPN и диагностику.')); }, ['Radmin.connect','Proxy.importFile'].includes(method) ? 300000 : 50000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('Нет ответа. Проверьте разрешение VPN и диагностику.')); }, ['Radmin.connect','Proxy.importFile','Remote.importKey'].includes(method) ? 300000 : 50000);
       pending.set(id, {resolve, reject, timer});
       native.postMessage(JSON.stringify({id, method, args}));
     });
@@ -47,12 +47,8 @@
     const nlist = $('networkList'); nlist.replaceChildren();
     if (!s.networks.length) empty(nlist, 'Список сетей появится после подключения.');
     for (const n of s.networks) { const card = el('article',''); card.append(el('h3',n.name),el('p',`${n.members} устройств · ${n.pendingApproval ? 'ожидает одобрения' : 'участник сети'}`),button('Выйти',async () => { if (confirm('Выйти из сети ' + n.name + '?')) await call('Radmin.leaveNetwork',{id:n.id}); },'danger')); nlist.append(card); }
-    const plist = $('peerList'); plist.replaceChildren(); if (!s.peers.length) empty(plist, 'В подключённых сетях пока нет устройств.');
-    for (const p of s.peers) {
-      const card = el('article',''), head = el('div','','peer-head'); head.append(el('h3',p.name),el('span',p.state,'badge')); card.append(head,el('p',p.ip,'mono'),el('small',`${p.transport || '—'} · ${p.rttRunning ? 'PING…' : p.rttMs != null ? p.rttMs.toFixed(1) + ' ms' : p.rttFailed ? 'RTT: нет ответа' : 'RTT не измерен'}`));
-      if (p.detail) card.append(el('small',p.detail));
-      const controls = el('div','','actions'); const ping = button('PING',() => call('Radmin.pingPeer',{id:p.id})); ping.disabled = p.state !== 'CONNECTED'; controls.append(ping,button('Скопировать IP',() => call('Radmin.copyIp',{id:p.id}))); card.append(controls); plist.append(card);
-    }
+    window.Classroom?.render(s);
+
   }
   document.querySelectorAll('[data-page]').forEach(b => b.onclick = () => action(async () => {
     currentPage = b.dataset.page;
@@ -94,6 +90,7 @@
   $('exportDiag').onclick = () => action(() => call('Diagnostics.export'));
   $('clearLogs').onclick = () => action(async () => { await call('Diagnostics.clearLogs'); await diagnostics(); });
   async function poll() { try { render(await call('Radmin.getState')); if(currentPage==='diagnostics')await diagnostics(); } catch(e) { $('status').textContent=e.message; } finally { setTimeout(poll,1500); } }
+  window.ClassroomApi = {call, action, toast};
   async function init() {
     try { const [p,s] = await Promise.all([call('Proxy.getConfig'),call('Settings.get')]);
       const f = $('proxyForm').elements; for(const key of ['mode','host','port','username','timeoutMs'])f[key].value=p[key];

@@ -38,3 +38,12 @@ TCP now binds an ephemeral local port before VpnService.protect(), so Android ha
 An AGP 8.5 DEX/R-class cache conflict occurred when adding the AAR to the existing classpath. A clean build without build cache passed; task build cache is now disabled for this project while ordinary up-to-date/incremental checks remain available.
 
 Not executed: native Android JNI loading, on-device protect(fd)/DNS callbacks, document picker, user-provider Reality handshake, real Radmin relay through Xray and restricted mobile networks. These require the device checklist in XRAY-0.2.ru.md. No user subscription, credentials or real provider configuration is included in the source tree or automatic tests.
+
+
+## 0.4.0 — Veyon classroom client
+
+- JVM suite: 156 tests, 155 passed, 1 skipped; includes 7 Veyon wire/auth/frame/input tests and 3 native input-gate tests.
+- Independent Qt_5_5 QVariant fixtures generated with PySide6 / Qt 6.12.0 (not bundled in the APK).
+- Synthetic loopback key/logon peer verifies SHA-512 signature, RSA-OAEP password, raw/copyrect/streaming-zlib pixels, Veyon feature framing, pointer/key messages, malformed lengths/rectangles and no authentication downgrade.
+- Playwright 1280/390/320px: network/search/online filters; 12 synthetic peers; 4 selected synthetic live images; view-only sends no input; explicit control; letterbox coordinates and keyboard; password clearing; no page errors or horizontal overflow.
+- Signed release build and release lint passed locally. Real Windows Veyon interoperability still requires manual acceptance on a user-controlled PC; the Veyon screenshots are explicitly synthetic.

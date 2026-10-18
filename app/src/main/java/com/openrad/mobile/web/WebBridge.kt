@@ -33,6 +33,7 @@ class WebBridge(
 ) {
     private val repository = EngineRepository(context, scope)
     private val settingsLock = Mutex()
+    val remote = com.openrad.mobile.remote.RemoteManager(context)
     private val inflight = java.util.concurrent.atomic.AtomicInteger()
 
     fun receive(raw: String, reply: (String) -> Unit) {
@@ -50,11 +51,13 @@ class WebBridge(
                 val args = request.optJSONObject("args") ?: JSONObject()
                 val result = withContext(Dispatchers.IO) {
                     // Consent is user-driven; the request remains pending until they answer.
-                    if (method in setOf("Radmin.connect", "Proxy.importFile")) call(method, args) else withTimeout(45000) { call(method, args) }
+                    if (method in setOf("Radmin.connect", "Proxy.importFile", "Remote.importKey")) call(method, args) else withTimeout(45000) { call(method, args) }
                 }
                 response.put("result", result ?: JSONObject.NULL)
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 response.put("error", "Operation timed out; see Diagnostics")
+            } catch (e: com.openrad.mobile.remote.RemoteError) {
+                response.put("error", "VEYON:" + e.code)
             } catch (e: com.openrad.mobile.xray.ProfileImportException) {
                 response.put("error", e.message)
             } catch (e: CancellationException) { throw e
@@ -77,6 +80,15 @@ class WebBridge(
     }
 
     private suspend fun call(method: String, a: JSONObject): Any? = when (method) {
+        "Remote.getConfig" -> remote.config()
+        "Remote.saveConfig" -> remote.save(a)
+        "Remote.importKey" -> importFile()?.let { remote.importKey(it) } ?: JSONObject().put("cancelled", true)
+        "Remote.open" -> remote.open(a.getLong("rid"))
+        "Remote.list" -> remote.list()
+        "Remote.close" -> { remote.close(a.getString("id")); true }
+        "Remote.closeAll" -> { remote.closeAll(); true }
+        "Remote.control" -> remote.control(a.getString("id"), a.getBoolean("enabled"))
+        "Remote.input" -> remote.input(a.getString("id"), a.getJSONArray("events"))
         "Radmin.getState" -> state()
         "Radmin.connect" -> {
             check(requestVpn()) { "VPN permission denied" }
@@ -191,7 +203,7 @@ class WebBridge(
     private fun state(): JSONObject {
         val s = repository.snapshot.value
         val status = repository.status.value
-        return JSONObject().put("phase", if (EngineHost.sessionBusy) "CONNECTING" else if (EngineHost.connectionError != null) "ERROR" else status.phase.name)
+        return JSONObject().put("remote", remote.list()).put("phase", if (EngineHost.sessionBusy) "CONNECTING" else if (EngineHost.connectionError != null) "ERROR" else status.phase.name)
             .put("message", EngineHost.connectionError ?: status.message)
             .put("xray", com.openrad.mobile.xray.XrayRuntime.status())
             .put("vpnReady", s.interfaceReady).put("interfaceError", s.interfaceError ?: JSONObject.NULL)

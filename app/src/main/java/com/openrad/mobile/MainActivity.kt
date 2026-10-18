@@ -39,7 +39,7 @@ class MainActivity : ComponentActivity() {
             check(importResult == null) { "Import already pending" }
             val pending = CompletableDeferred<Uri?>()
             importResult = pending
-            importDocument.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
+            importDocument.launch(arrayOf("*/*"))
             try { pending.await() } finally { if (importResult === pending) importResult = null }
         } ?: return null
         return withContext(Dispatchers.IO) {
@@ -98,9 +98,20 @@ class MainActivity : ComponentActivity() {
         val assets = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this)).build()
         web.webViewClient = object : WebViewClient() {
-            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse =
-                assets.shouldInterceptRequest(request.url) ?: WebResourceResponse("text/plain", "UTF-8", 403,
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
+                if (request.url.scheme == "https" && request.url.authority == "appassets.androidplatform.net" &&
+                    request.url.path?.startsWith("/remote/frame/") == true && ::bridge.isInitialized) {
+                    val id = request.url.lastPathSegment.orEmpty()
+                    val width = request.url.getQueryParameter("width")?.toIntOrNull() ?: 400
+                    val bytes = runCatching { bridge.remote.image(id, width) }.getOrNull()
+                    return WebResourceResponse(if (bytes != null) "image/jpeg" else "text/plain", null,
+                        if (bytes != null) 200 else 503, if (bytes != null) "OK" else "Unavailable",
+                        mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"),
+                        ByteArrayInputStream(bytes ?: ByteArray(0)))
+                }
+                return assets.shouldInterceptRequest(request.url) ?: WebResourceResponse("text/plain", "UTF-8", 403,
                     "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+            }
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
                 request.url.toString().substringBefore('#') != PAGE
         }
@@ -119,7 +130,18 @@ class MainActivity : ComponentActivity() {
         web.loadUrl(PAGE)
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (::bridge.isInitialized) bridge.remote.resume()
+    }
+
+    override fun onStop() {
+        if (::bridge.isInitialized) bridge.remote.pause()
+        super.onStop()
+    }
+
     override fun onDestroy() {
+        if (::bridge.isInitialized) bridge.remote.pause()
         consent?.cancel()
         importResult?.cancel()
         if (::web.isInitialized) {

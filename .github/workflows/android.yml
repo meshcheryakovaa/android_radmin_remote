@@ -26,7 +26,9 @@ jobs:
       - name: Install SDK 34
         run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
       - name: Verify JavaScript
-        run: node --check app/src/main/assets/www/app.js
+        run: |
+          node --check app/src/main/assets/www/app.js
+          node --check app/src/main/assets/www/classroom.js
       - name: Unit tests and debug APK
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-build-cache --stacktrace
       - name: Native Xray smoke test (loopback only)
@@ -50,15 +52,15 @@ jobs:
         run: |
           ./gradlew :app:assembleRelease --no-build-cache --stacktrace
           mkdir -p build/release-apks
-          cp app/build/outputs/apk/release/app-release.apk build/release-apks/android-radmin-remote-0.3.0.apk
-          signer_digest=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs build/release-apks/android-radmin-remote-0.3.0.apk | awk '/certificate SHA-256 digest:/ {print $NF; exit}')
+          cp app/build/outputs/apk/release/app-release.apk build/release-apks/android-radmin-remote-0.4.0.apk
+          signer_digest=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs build/release-apks/android-radmin-remote-0.4.0.apk | awk '/certificate SHA-256 digest:/ {print $NF; exit}')
           test "$signer_digest" = "$(cat release-signing-certificate.sha256)"
       - name: Upload signed main APK
         if: steps.signing.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: android-radmin-remote-0.3.0
-          path: build/release-apks/android-radmin-remote-0.3.0.apk
+          name: android-radmin-remote-0.4.0
+          path: build/release-apks/android-radmin-remote-0.4.0.apk
           if-no-files-found: error
       - name: Upload test reports
         if: always()
@@ -71,18 +73,19 @@ jobs:
         if: steps.signing.outputs.ready == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.3.0
+          tag_name: v0.4.0
           target_commitish: ${{ github.sha }}
-          name: Android Radmin Remote 0.3.0
-          prerelease: false
-          files: build/release-apks/android-radmin-remote-0.3.0.apk
+          name: Android Radmin Remote 0.4.0
+          prerelease: true
+          files: build/release-apks/android-radmin-remote-0.4.0.apk
           fail_on_unmatched_files: true
           body: |
-            Main signed application: Direct / SOCKS5 / embedded VLESS Reality TCP and gRPC.
+            Classroom dashboard: direct Veyon RFB 11100, key/logon authentication, up to four live screens, view/control, pointer and keyboard.
+            Preserves Direct / SOCKS5 / embedded VLESS Reality TCP and gRPC VPN.
             Android package: ru.meshcheryakov.androidradminremote. Android 8.0+.
             Uses the permanent release certificate; updates must keep this same key and package.
-            First main installation has separate identity/settings from the old debug/test apps. Keep those installed until configured.
-            The gRPC relay path and PC RTT were validated by the user on the test build. AUTO and remote desktop viewer are not included.
+            Updates the main 0.3.0 with the same certificate. VPN identity/settings are retained on a normal update.
+            Veyon authentication and framebuffer/input are verified on synthetic loopback peers and independent Qt wire fixtures. Real Windows interoperability requires manual validation.
       - name: Remove temporary signing files
         if: always() && steps.signing.outputs.ready == 'true'
         env:
